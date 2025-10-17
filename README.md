@@ -17,8 +17,9 @@ The program prints the local solar-noon timestamp along with the timezone abbrev
 
 ## Implementation Notes
 
-- `src/main.rs` builds the time-zone aware NYC date, translates it to a Julian Day, and then ports NOAA’s helper routines (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) to derive the solar-noon minutes.
-- The result is converted to `hh:mm:ss` and mapped back to `America/New_York` using `chrono-tz`, allowing the output to automatically honor daylight saving changes.
+- `src/lib.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime`.
+- `src/main.rs` is a thin CLI wrapper that parses an optional `YYYY-MM-DD` argument and prints the NYC solar noon via the shared helper.
+- `src/lib.rs` also contains regression tests that pin representative seasonal dates to NOAA’s published values.
 
 ## Mathematical Background
 
@@ -62,14 +63,16 @@ Each of those quantities is computed using the same series expansions NOAA publi
 ```bash
 cargo fmt
 cargo clippy
-cargo test
 ```
+
+Run the regression suite with `cargo nextest run` (requires `cargo-nextest`) or via the flake checks below.
 
 With Nix flakes available:
 
 ```bash
 nix develop       # enter a shell with rustc/cargo tooling
 nix build         # build the CLI via crane
+nix flake check   # build + run tests via cargo-nextest
 ```
 
 Contributions should maintain parity with NOAA’s reference results for NYC before submission.***

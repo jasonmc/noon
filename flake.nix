@@ -22,7 +22,9 @@
           inherit src;
           cargoLock = ./Cargo.lock;
           strictDeps = true;
-          buildInputs = [ ];
+          buildInputs = [
+            pkgs.cargo-nextest
+          ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -32,7 +34,14 @@
         });
       in
       {
-        checks.noon = noon;
+        checks = {
+          inherit noon;
+          noon-nextest = craneLib.cargoNextest (commonArgs // {
+            inherit cargoArtifacts;
+            partitions = 1;
+            partitionType = "count";
+          });
+        };
 
         packages.default = noon;
 
@@ -42,9 +51,6 @@
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
-          packages = [
-            pkgs.ripgrep
-          ];
         };
       });
 }
