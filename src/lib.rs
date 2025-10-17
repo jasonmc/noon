@@ -6,46 +6,74 @@ use std::f64::consts::PI;
 pub const LONGITUDE_NYC: f64 = -77.006;
 const MINUTES_PER_DAY: f64 = 1_440.0;
 const SECONDS_PER_DAY: f64 = 86_400.0;
+const MINUTES_PER_HOUR: f64 = 60.0;
+const MINUTES_PER_DEGREE: f64 = 4.0;
+const SOLAR_NOON_BASE_MINUTES: f64 = 720.0;
+const SECONDS_PER_HOUR: i64 = 3_600;
+const SECONDS_PER_MINUTE: i64 = 60;
+const JULIAN_DAY_J2000: f64 = 2_451_545.0;
+const JULIAN_DAYS_PER_CENTURY: f64 = 36_525.0;
 
+/// Returns the solar noon instant for NYC (`America/New_York`) on the provided date.
 pub fn solar_noon_datetime(date: NaiveDate) -> DateTime<Tz> {
     let tz: Tz = New_York;
     let timezone_hours = timezone_offset_hours(tz, date);
-    let jd = julian_day(date.year(), date.month() as i32, date.day() as i32);
+    let jd = julian_day(date);
     let sol_noon_minutes = calc_sol_noon(jd, LONGITUDE_NYC, timezone_hours);
     let (hour, minute, second) = minutes_to_hms(sol_noon_minutes);
 
-    build_local_datetime(tz, date, hour, minute, second)
+    zoned_time(
+        tz,
+        date,
+        hour,
+        minute,
+        second,
+        "unable to resolve solar noon",
+    )
 }
 
 fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> f64 {
-    let local_midday = match tz.with_ymd_and_hms(date.year(), date.month(), date.day(), 12, 0, 0) {
-        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt,
-        LocalResult::None => panic!("local noon is not representable for {}", date),
-    };
+    let local_midday = zoned_time(
+        tz,
+        date,
+        12,
+        0,
+        0,
+        "local noon is not representable when computing offset",
+    );
 
-    local_midday.offset().fix().local_minus_utc() as f64 / 3600.0
+    f64::from(local_midday.offset().fix().local_minus_utc()) / SECONDS_PER_HOUR as f64
 }
 
-fn build_local_datetime(tz: Tz, date: NaiveDate, hour: u32, minute: u32, second: u32) -> DateTime<Tz> {
+fn zoned_time(
+    tz: Tz,
+    date: NaiveDate,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    context: &str,
+) -> DateTime<Tz> {
     match tz.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, second) {
         LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt,
-        LocalResult::None => panic!("unable to resolve solar noon in local time for {}", date),
+        LocalResult::None => panic!("{context} on {}", date),
     }
 }
 
 fn minutes_to_hms(minutes: f64) -> (u32, u32, u32) {
-    let total_seconds = (minutes * 60.0).round().rem_euclid(SECONDS_PER_DAY) as i64;
-    let hour = (total_seconds / 3_600) as u32;
-    let minute = ((total_seconds % 3_600) / 60) as u32;
-    let second = (total_seconds % 60) as u32;
+    let total_seconds = (minutes * SECONDS_PER_MINUTE as f64)
+        .round()
+        .rem_euclid(SECONDS_PER_DAY) as i64;
+    let hour = (total_seconds / SECONDS_PER_HOUR) as u32;
+    let minute = ((total_seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE) as u32;
+    let second = (total_seconds % SECONDS_PER_MINUTE) as u32;
 
     (hour, minute, second)
 }
 
-fn julian_day(year: i32, month: i32, day: i32) -> f64 {
-    let mut y = year as f64;
-    let mut m = month as f64;
-    let d = day as f64;
+fn julian_day(date: NaiveDate) -> f64 {
+    let mut y = date.year() as f64;
+    let mut m = date.month() as f64;
+    let d = date.day() as f64;
 
     if m <= 2.0 {
         y -= 1.0;
@@ -55,26 +83,25 @@ fn julian_day(year: i32, month: i32, day: i32) -> f64 {
     let a = (y / 100.0).floor();
     let b = 2.0 - a + (a / 4.0).floor();
 
-    (365.25 * (y + 4716.0)).floor()
-        + (30.6001 * (m + 1.0)).floor()
-        + d
-        + b
-        - 1524.5
+    (365.25 * (y + 4716.0)).floor() + (30.6001 * (m + 1.0)).floor() + d + b - 1524.5
 }
 
+/// Returns the solar-noon minute count (local time) for the provided day and longitude.
 fn calc_sol_noon(jd: f64, longitude: f64, timezone: f64) -> f64 {
     let t_noon = calc_time_julian_cent(jd - longitude / 360.0);
     let mut eq_time = calc_equation_of_time(t_noon);
-    let sol_noon_offset = 720.0 - (longitude * 4.0) - eq_time;
+    let sol_noon_offset = SOLAR_NOON_BASE_MINUTES - (longitude * MINUTES_PER_DEGREE) - eq_time;
 
     let new_t = calc_time_julian_cent(jd - 0.5 + sol_noon_offset / MINUTES_PER_DAY);
     eq_time = calc_equation_of_time(new_t);
 
-    (720.0 - (longitude * 4.0) - eq_time + (timezone * 60.0)).rem_euclid(MINUTES_PER_DAY)
+    (SOLAR_NOON_BASE_MINUTES - (longitude * MINUTES_PER_DEGREE) - eq_time
+        + (timezone * MINUTES_PER_HOUR))
+        .rem_euclid(MINUTES_PER_DAY)
 }
 
 fn calc_time_julian_cent(jd: f64) -> f64 {
-    (jd - 2_451_545.0) / 36_525.0
+    (jd - JULIAN_DAY_J2000) / JULIAN_DAYS_PER_CENTURY
 }
 
 fn calc_equation_of_time(t: f64) -> f64 {
@@ -83,20 +110,22 @@ fn calc_equation_of_time(t: f64) -> f64 {
     let e = calc_eccentricity_earth_orbit(t);
     let m = calc_geom_mean_anomaly_sun(t);
 
-    let y = (deg_to_rad(epsilon) / 2.0).tan().powi(2);
-    let sin2l0 = (2.0 * deg_to_rad(l0)).sin();
-    let sinm = deg_to_rad(m).sin();
-    let cos2l0 = (2.0 * deg_to_rad(l0)).cos();
-    let sin4l0 = (4.0 * deg_to_rad(l0)).sin();
-    let sin2m = (2.0 * deg_to_rad(m)).sin();
+    let epsilon_rad = deg_to_rad(epsilon);
+    let l0_rad = deg_to_rad(l0);
+    let m_rad = deg_to_rad(m);
 
-    let e_time = y * sin2l0
-        - 2.0 * e * sinm
-        + 4.0 * e * y * sinm * cos2l0
+    let y = (epsilon_rad / 2.0).tan().powi(2);
+    let sin2l0 = (2.0 * l0_rad).sin();
+    let sinm = m_rad.sin();
+    let cos2l0 = (2.0 * l0_rad).cos();
+    let sin4l0 = (4.0 * l0_rad).sin();
+    let sin2m = (2.0 * m_rad).sin();
+
+    let e_time = y * sin2l0 - 2.0 * e * sinm + 4.0 * e * y * sinm * cos2l0
         - 0.5 * y * y * sin4l0
         - 1.25 * e * e * sin2m;
 
-    rad_to_deg(e_time) * 4.0
+    rad_to_deg(e_time) * MINUTES_PER_DEGREE
 }
 
 fn calc_geom_mean_long_sun(t: f64) -> f64 {
@@ -145,7 +174,8 @@ mod tests {
             .expect("expected instant to exist");
 
         assert_eq!(
-            actual, expected,
+            actual,
+            expected,
             "solar noon mismatch on {} (expected {:02}:{:02}:{:02}, got {})",
             date,
             hour,
