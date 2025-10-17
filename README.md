@@ -65,4 +65,11 @@ cargo clippy
 cargo test
 ```
 
+With Nix flakes available:
+
+```bash
+nix develop       # enter a shell with rustc/cargo tooling
+nix build         # build the CLI via crane
+```
+
 Contributions should maintain parity with NOAA’s reference results for NYC before submission.***
