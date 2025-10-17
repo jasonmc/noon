@@ -1,10 +1,12 @@
 use chrono::offset::Offset;
-use chrono::{Datelike, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::{America::New_York, Tz};
 use std::env;
 use std::f64::consts::PI;
 
 const LONGITUDE_NYC: f64 = -77.006;
+const MINUTES_PER_DAY: f64 = 1_440.0;
+const SECONDS_PER_DAY: f64 = 86_400.0;
 
 fn main() {
     let tz: Tz = New_York;
@@ -41,19 +43,8 @@ fn main() {
 fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> f64 {
     let naive_midday = date
         .and_hms_opt(12, 0, 0)
-        .expect("failed to construct midday for target date");
-
-    let local_midday = match tz.from_local_datetime(&naive_midday) {
-        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt,
-        LocalResult::None => tz
-            .from_local_datetime(
-                &date
-                    .and_hms_opt(11, 0, 0)
-                    .expect("failed to construct fallback time"),
-            )
-            .single()
-            .expect("unable to resolve timezone offset"),
-    };
+        .expect("failed to build midday for target date");
+    let local_midday = resolve_local_datetime(tz, naive_midday);
 
     local_midday.offset().fix().local_minus_utc() as f64 / 3600.0
 }
@@ -61,24 +52,43 @@ fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> f64 {
 fn build_local_datetime(tz: Tz, date: NaiveDate, hour: u32, minute: u32, second: u32) -> chrono::DateTime<Tz> {
     let naive = date
         .and_hms_opt(hour, minute, second)
-        .unwrap_or_else(|| date.and_hms_opt(hour, minute, second.saturating_sub(1)).expect("invalid time"));
+        .unwrap_or_else(|| panic!("invalid clock value {hour:02}:{minute:02}:{second:02}"));
 
+    resolve_local_datetime(tz, naive)
+}
+
+fn resolve_local_datetime(tz: Tz, naive: NaiveDateTime) -> chrono::DateTime<Tz> {
     match tz.from_local_datetime(&naive) {
-        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt,
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(first, _) => first,
         LocalResult::None => {
-            let fallback = date
-                .and_hms_opt(hour, minute, second.saturating_sub(1))
-                .expect("failed to construct fallback NaiveDateTime");
-            tz.from_local_datetime(&fallback)
-                .single()
-                .expect("unable to resolve local datetime")
+            // Walk outward in one-minute steps until we land on a concrete instant.
+            for minutes in 1..=120 {
+                if let Some(candidate) = adjust_and_resolve(tz, naive, -minutes) {
+                    return candidate;
+                }
+                if let Some(candidate) = adjust_and_resolve(tz, naive, minutes) {
+                    return candidate;
+                }
+            }
+            panic!("unable to resolve local datetime near {naive}");
         }
     }
 }
 
+fn adjust_and_resolve(tz: Tz, naive: NaiveDateTime, delta_minutes: i64) -> Option<chrono::DateTime<Tz>> {
+    let shifted = naive.checked_add_signed(Duration::minutes(delta_minutes))?;
+
+    match tz.from_local_datetime(&shifted) {
+        LocalResult::Single(dt) => Some(dt),
+        LocalResult::Ambiguous(first, _) => Some(first),
+        LocalResult::None => None,
+    }
+}
+
 fn minutes_to_hms(minutes: f64) -> (u32, u32, u32) {
-    let mut total_seconds = (minutes * 60.0).round() as i64;
-    total_seconds = ((total_seconds % 86_400) + 86_400) % 86_400;
+    let total_seconds = (minutes * 60.0).round().rem_euclid(SECONDS_PER_DAY);
+    let total_seconds = total_seconds as i64;
 
     let hour = (total_seconds / 3_600) as u32;
     let minute = ((total_seconds % 3_600) / 60) as u32;
@@ -112,15 +122,15 @@ fn calc_sol_noon(jd: f64, longitude: f64, timezone: f64) -> f64 {
     let mut eq_time = calc_equation_of_time(t_noon);
     let sol_noon_offset = 720.0 - (longitude * 4.0) - eq_time;
 
-    let new_t = calc_time_julian_cent(jd - 0.5 + sol_noon_offset / 1_440.0);
+    let new_t = calc_time_julian_cent(jd - 0.5 + sol_noon_offset / MINUTES_PER_DAY);
     eq_time = calc_equation_of_time(new_t);
 
     let mut sol_noon_local = 720.0 - (longitude * 4.0) - eq_time + (timezone * 60.0);
     while sol_noon_local < 0.0 {
-        sol_noon_local += 1_440.0;
+        sol_noon_local += MINUTES_PER_DAY;
     }
-    while sol_noon_local >= 1_440.0 {
-        sol_noon_local -= 1_440.0;
+    while sol_noon_local >= MINUTES_PER_DAY {
+        sol_noon_local -= MINUTES_PER_DAY;
     }
 
     sol_noon_local
