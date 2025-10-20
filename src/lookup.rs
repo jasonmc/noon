@@ -110,10 +110,8 @@ impl std::error::Error for LocationLookupError {}
 /// into timezone and longitude coordinates.
 pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
     let parsed = ParsedQuery::parse(query)?;
-    let country_code = resolve_country_code(parsed.country_input.as_deref())?;
-    let country_code_ref = country_code.as_deref();
 
-    let city = match_city(&parsed, country_code_ref)?;
+    let city = match_city(&parsed)?;
 
     let tz_name = TZ_FINDER.get_tz_name(city.lng, city.lat);
     if tz_name.is_empty() {
@@ -169,31 +167,18 @@ fn insert_country_name_variants(
             lookup.entry(trimmed.to_ascii_lowercase()).or_insert(code);
         }
     }
-}
 
-fn resolve_country_code(input: Option<&str>) -> Result<Option<String>, LocationLookupError> {
-    match input {
-        None => Ok(None),
-        Some(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            let key = trimmed.to_ascii_lowercase();
-            match COUNTRY_LOOKUP.get(&key) {
-                Some(code) => Ok(Some((*code).to_string())),
-                None => Err(LocationLookupError::UnknownCountry {
-                    input: value.to_string(),
-                }),
-            }
-        }
+    if name.contains(" of ") {
+        let without_of = name.replace(" of ", " ");
+        lookup
+            .entry(without_of.to_ascii_lowercase())
+            .or_insert(code);
+        let collapsed = name.replace(" of ", "");
+        lookup.entry(collapsed.to_ascii_lowercase()).or_insert(code);
     }
 }
 
-fn match_city(
-    parsed: &ParsedQuery,
-    country_code: Option<&str>,
-) -> Result<&'static CityRecord, LocationLookupError> {
+fn match_city(parsed: &ParsedQuery) -> Result<&'static CityRecord, LocationLookupError> {
     let mut fallback_error: Option<LocationLookupError> = None;
 
     let exact_matches: Vec<&CityRecord> = CITIES
@@ -203,10 +188,11 @@ fn match_city(
 
     if let Some(result) = attempt_match(
         &exact_matches,
-        parsed,
-        country_code,
+        parsed.country_code.as_deref(),
+        &parsed.region_hints,
         false,
         &mut fallback_error,
+        parsed,
     )? {
         return Ok(result);
     }
@@ -219,10 +205,11 @@ fn match_city(
 
         if let Some(result) = attempt_match(
             &abbreviation_matches,
-            parsed,
-            country_code,
+            parsed.country_code.as_deref(),
+            &parsed.region_hints,
             true,
             &mut fallback_error,
+            parsed,
         )? {
             return Ok(result);
         }
@@ -260,10 +247,11 @@ fn match_city(
 
     if let Some(result) = attempt_match(
         &fuzzy_candidates,
-        parsed,
-        country_code,
+        parsed.country_code.as_deref(),
+        &parsed.region_hints,
         false,
         &mut fallback_error,
+        parsed,
     )? {
         return Ok(result);
     }
@@ -275,10 +263,11 @@ fn match_city(
 
 fn attempt_match<'a>(
     candidates: &[&'a CityRecord],
-    parsed: &ParsedQuery,
     country_code: Option<&str>,
+    region_hints: &[String],
     allow_ambiguity: bool,
     fallback_error: &mut Option<LocationLookupError>,
+    parsed: &ParsedQuery,
 ) -> Result<Option<&'a CityRecord>, LocationLookupError> {
     if candidates.is_empty() {
         return Ok(None);
@@ -300,6 +289,10 @@ fn attempt_match<'a>(
             });
         }
 
+        let regional = refine_by_region(&filtered, region_hints);
+        if !regional.is_empty() {
+            return select_candidate(&regional, parsed).map(Some);
+        }
         return select_candidate(&filtered, parsed).map(Some);
     }
 
@@ -340,6 +333,43 @@ fn unique_countries(candidates: &[&CityRecord]) -> Vec<String> {
         }
     }
     result
+}
+
+fn refine_by_region<'a>(
+    candidates: &[&'a CityRecord],
+    region_hints: &[String],
+) -> Vec<&'a CityRecord> {
+    if region_hints.is_empty() {
+        return Vec::new();
+    }
+
+    let normalized: Vec<String> = region_hints
+        .iter()
+        .map(|hint| hint.trim().to_ascii_lowercase())
+        .filter(|hint| !hint.is_empty())
+        .collect();
+
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    candidates
+        .iter()
+        .copied()
+        .filter(|city| admin_matches_any_hint(city, &normalized))
+        .collect()
+}
+
+fn admin_matches_any_hint(city: &CityRecord, hints: &[String]) -> bool {
+    let admin1 = city.admin1.to_ascii_lowercase();
+    let admin2 = city.admin2.to_ascii_lowercase();
+
+    hints.iter().any(|hint| {
+        admin1 == *hint
+            || (!admin2.is_empty() && admin2 == *hint)
+            || (!admin1.is_empty() && admin1.starts_with(hint))
+            || (!admin2.is_empty() && admin2.starts_with(hint))
+    })
 }
 
 fn abbreviation_tokens(value: &str) -> Vec<String> {
@@ -393,7 +423,21 @@ fn abbreviation_match(parsed: &ParsedQuery, city: &CityRecord) -> bool {
 }
 
 fn describe_city(city: &CityRecord) -> String {
-    format!("{} ({})", city.name, city.country)
+    match (
+        city.country.as_str(),
+        city.admin1.trim(),
+        city.admin2.trim(),
+    ) {
+        (country, admin1, _) if admin1.is_empty() => {
+            format!("{} ({})", city.name, country)
+        }
+        (country, admin1, admin2) if admin2.is_empty() => {
+            format!("{} ({}-{})", city.name, country, admin1)
+        }
+        (country, admin1, admin2) => {
+            format!("{} ({}-{}-{})", city.name, country, admin1, admin2)
+        }
+    }
 }
 
 struct ParsedQuery {
@@ -402,7 +446,8 @@ struct ParsedQuery {
     normalized_name: String,
     abbreviation_tokens: Vec<String>,
     condensed_length: usize,
-    country_input: Option<String>,
+    country_code: Option<String>,
+    region_hints: Vec<String>,
 }
 
 impl ParsedQuery {
@@ -445,13 +490,16 @@ impl ParsedQuery {
             abbreviation_tokens.dedup();
         }
 
+        let (country_code, region_hints) = parse_country_segments(country_input.as_deref())?;
+
         Ok(Self {
             original: trimmed.to_string(),
             name,
             normalized_name,
             abbreviation_tokens,
             condensed_length,
-            country_input,
+            country_code,
+            region_hints,
         })
     }
 }
@@ -460,6 +508,15 @@ fn split_name_and_country(input: &str) -> (String, Option<String>) {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return (String::new(), None);
+    }
+
+    if let Some((open_idx, close_idx)) = trailing_paren_pair(trimmed) {
+        let name_part = trimmed[..open_idx].trim();
+        let country_part = trimmed[open_idx + 1..close_idx].trim();
+
+        if !name_part.is_empty() && !country_part.is_empty() {
+            return (name_part.to_string(), Some(country_part.to_string()));
+        }
     }
 
     if trimmed.contains(',') {
@@ -479,19 +536,73 @@ fn split_name_and_country(input: &str) -> (String, Option<String>) {
         }
     }
 
-    if let Some((open_idx, close_idx)) = trailing_paren_pair(trimmed) {
-        let name_part = trimmed[..open_idx].trim();
-        let country_part = trimmed[open_idx + 1..close_idx].trim();
+    (trimmed.to_string(), None)
+}
 
-        if !name_part.is_empty() && !country_part.is_empty() {
-            let key = country_part.to_ascii_lowercase();
-            if COUNTRY_LOOKUP.get(&key).is_some() {
-                return (name_part.to_string(), Some(country_part.to_string()));
-            }
+fn parse_country_segments(
+    input: Option<&str>,
+) -> Result<(Option<String>, Vec<String>), LocationLookupError> {
+    let Some(raw) = input else {
+        return Ok((None, Vec::new()));
+    };
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+
+    let lowered_full = trimmed.to_ascii_lowercase();
+    if let Some(code) = COUNTRY_LOOKUP.get(&lowered_full) {
+        return Ok((Some((*code).to_string()), Vec::new()));
+    }
+
+    let tokens = tokenize_hint(trimmed);
+    if tokens.is_empty() {
+        return Err(LocationLookupError::UnknownCountry {
+            input: trimmed.to_string(),
+        });
+    }
+
+    for prefix_len in (1..=tokens.len()).rev() {
+        let candidate = tokens[..prefix_len].join(" ").to_ascii_lowercase();
+        if let Some(code) = COUNTRY_LOOKUP.get(&candidate) {
+            let mut hints: Vec<String> = tokens[prefix_len..]
+                .iter()
+                .map(|hint| hint.trim().to_ascii_uppercase())
+                .filter(|hint| !hint.is_empty())
+                .collect();
+            hints.sort();
+            hints.dedup();
+            return Ok((Some((*code).to_string()), hints));
         }
     }
 
-    (trimmed.to_string(), None)
+    Err(LocationLookupError::UnknownCountry {
+        input: trimmed.to_string(),
+    })
+}
+
+fn tokenize_hint(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for segment in value.split(|c: char| c == ',' || c == ';') {
+        for token in segment.split(|c: char| c.is_ascii_whitespace() || c == '/') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            if token.contains('-') {
+                for part in token.split('-') {
+                    let part = part.trim();
+                    if !part.is_empty() {
+                        tokens.push(part.to_string());
+                    }
+                }
+            } else {
+                tokens.push(token.to_string());
+            }
+        }
+    }
+    tokens
 }
 
 fn trailing_paren_pair(value: &str) -> Option<(usize, usize)> {
@@ -528,5 +639,13 @@ mod tests {
         let city = resolve_city("Dublin (IE)").expect("Dublin with country hint");
         assert_eq!(city.city_name, "Dublin");
         assert_eq!(city.country_code, "IE");
+    }
+
+    #[test]
+    fn resolves_with_state_hint() {
+        let city = resolve_city("Dublin (US, OH)").expect("Dublin with state hint");
+        assert_eq!(city.city_name, "Dublin");
+        assert_eq!(city.country_code, "US");
+        assert_eq!(city.latitude.round() as i32, 40); // Ohio location ~40.09923
     }
 }
