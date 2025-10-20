@@ -11,9 +11,12 @@ pub struct Location {
 
 impl Location {
     pub fn new(timezone: Tz, longitude: f64) -> Self {
-        Self { timezone, longitude }
+        Self {
+            timezone,
+            longitude,
+        }
     }
 }
 
-pub use lookup::{resolve_city, CityLocation, LocationLookupError};
+pub use lookup::{CityLocation, LocationLookupError, resolve_city};
 pub use solar::solar_noon_datetime;

@@ -1,6 +1,6 @@
 use crate::Location;
-use cities_json::{City as CityRecord, CITIES};
 use chrono_tz::Tz;
+use cities_json::{CITIES, City as CityRecord};
 use iso_country::data;
 use once_cell::sync::Lazy;
 use std::cmp::Ordering;
@@ -31,8 +31,12 @@ pub struct CityLocation {
 #[derive(Debug, Clone)]
 pub enum LocationLookupError {
     EmptyQuery,
-    UnknownCountry { input: String },
-    NotFound { query: String },
+    UnknownCountry {
+        input: String,
+    },
+    NotFound {
+        query: String,
+    },
     NotFoundInCountry {
         query: String,
         country_code: String,
@@ -42,8 +46,12 @@ pub enum LocationLookupError {
         query: String,
         suggestions: Vec<String>,
     },
-    TimezoneUnavailable { city: String },
-    InvalidTimezone { tz_name: String },
+    TimezoneUnavailable {
+        city: String,
+    },
+    InvalidTimezone {
+        tz_name: String,
+    },
 }
 
 impl fmt::Display for LocationLookupError {
@@ -151,18 +159,14 @@ fn insert_country_name_variants(
     if let Some((without_paren, _)) = name.split_once('(') {
         let trimmed = without_paren.trim();
         if !trimmed.is_empty() {
-            lookup
-                .entry(trimmed.to_ascii_lowercase())
-                .or_insert(code);
+            lookup.entry(trimmed.to_ascii_lowercase()).or_insert(code);
         }
     }
 
     if let Some((before_comma, _)) = name.split_once(',') {
         let trimmed = before_comma.trim();
         if !trimmed.is_empty() {
-            lookup
-                .entry(trimmed.to_ascii_lowercase())
-                .or_insert(code);
+            lookup.entry(trimmed.to_ascii_lowercase()).or_insert(code);
         }
     }
 }
@@ -415,18 +419,11 @@ impl ParsedQuery {
             .copied()
             .unwrap_or(trimmed);
 
-        let segments: Vec<String> = canonical_source
-            .split(',')
-            .map(|segment| segment.trim())
-            .filter(|segment| !segment.is_empty())
-            .map(String::from)
-            .collect();
-
-        let name = segments.first().cloned().unwrap_or_else(|| trimmed.to_string());
-        let country_input = if segments.len() > 1 {
-            Some(segments[1..].join(", "))
+        let (name, country_input) = split_name_and_country(canonical_source);
+        let name = if name.is_empty() {
+            trimmed.to_string()
         } else {
-            None
+            name
         };
 
         let normalized_name = name.to_ascii_lowercase();
@@ -459,6 +456,53 @@ impl ParsedQuery {
     }
 }
 
+fn split_name_and_country(input: &str) -> (String, Option<String>) {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return (String::new(), None);
+    }
+
+    if trimmed.contains(',') {
+        let mut segments = trimmed
+            .split(',')
+            .map(|segment| segment.trim())
+            .filter(|segment| !segment.is_empty());
+
+        if let Some(name) = segments.next() {
+            let rest: Vec<&str> = segments.collect();
+            let country = if rest.is_empty() {
+                None
+            } else {
+                Some(rest.join(", ").to_string())
+            };
+            return (name.to_string(), country);
+        }
+    }
+
+    if let Some((open_idx, close_idx)) = trailing_paren_pair(trimmed) {
+        let name_part = trimmed[..open_idx].trim();
+        let country_part = trimmed[open_idx + 1..close_idx].trim();
+
+        if !name_part.is_empty() && !country_part.is_empty() {
+            let key = country_part.to_ascii_lowercase();
+            if COUNTRY_LOOKUP.get(&key).is_some() {
+                return (name_part.to_string(), Some(country_part.to_string()));
+            }
+        }
+    }
+
+    (trimmed.to_string(), None)
+}
+
+fn trailing_paren_pair(value: &str) -> Option<(usize, usize)> {
+    let close_idx = value.rfind(')')?;
+    if close_idx != value.len().saturating_sub(1) {
+        return None;
+    }
+    let open_idx = value[..close_idx].rfind('(')?;
+    Some((open_idx, close_idx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +521,12 @@ mod tests {
         let city = resolve_city("NYC").expect("NYC abbreviation");
         assert_eq!(city.city_name, "New York City");
         assert_eq!(city.country_code, "US");
+    }
+
+    #[test]
+    fn resolves_with_country_hint_in_parentheses() {
+        let city = resolve_city("Dublin (IE)").expect("Dublin with country hint");
+        assert_eq!(city.city_name, "Dublin");
+        assert_eq!(city.country_code, "IE");
     }
 }
