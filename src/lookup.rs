@@ -2,17 +2,18 @@ use crate::Location;
 use chrono_tz::Tz;
 use cities_json::{CITIES, City as CityRecord};
 use iso_country::data;
-use once_cell::sync::Lazy;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use strsim::jaro_winkler;
 use tzf_rs::Finder;
 
-static TZ_FINDER: Lazy<Finder> = Lazy::new(Finder::new);
-static COUNTRY_LOOKUP: Lazy<HashMap<String, &'static str>> = Lazy::new(build_country_lookup);
-static CITY_ALIASES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+static TZ_FINDER: LazyLock<Finder> = LazyLock::new(Finder::new);
+static COUNTRY_LOOKUP: LazyLock<HashMap<String, &'static str>> =
+    LazyLock::new(build_country_lookup);
+static CITY_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     let mut aliases = HashMap::new();
     aliases.insert("nyc", "New York City, US");
     aliases
@@ -31,8 +32,12 @@ pub struct CityLocation {
 #[derive(Debug, Clone)]
 pub enum LocationLookupError {
     EmptyQuery,
-    UnknownCountry { input: String },
-    NotFound { query: String },
+    UnknownCountry {
+        input: String,
+    },
+    NotFound {
+        query: String,
+    },
     NotFoundInCountry {
         query: String,
         country_code: String,
@@ -42,8 +47,12 @@ pub enum LocationLookupError {
         query: String,
         suggestions: Vec<String>,
     },
-    TimezoneUnavailable { city: String },
-    InvalidTimezone { tz_name: String },
+    TimezoneUnavailable {
+        city: String,
+    },
+    InvalidTimezone {
+        tz_name: String,
+    },
 }
 
 impl fmt::Display for LocationLookupError {
@@ -62,7 +71,10 @@ impl fmt::Display for LocationLookupError {
                 available_countries,
             } => {
                 if available_countries.is_empty() {
-                    write!(f, "could not find '{query}' in country code '{country_code}'")
+                    write!(
+                        f,
+                        "could not find '{query}' in country code '{country_code}'"
+                    )
                 } else {
                     write!(
                         f,
@@ -83,7 +95,10 @@ impl fmt::Display for LocationLookupError {
                 }
             }
             LocationLookupError::TimezoneUnavailable { city } => {
-                write!(f, "unable to determine timezone for coordinates of '{city}'")
+                write!(
+                    f,
+                    "unable to determine timezone for coordinates of '{city}'"
+                )
             }
             LocationLookupError::InvalidTimezone { tz_name } => {
                 write!(f, "unrecognized timezone identifier '{tz_name}'")

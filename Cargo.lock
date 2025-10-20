@@ -289,7 +289,6 @@ dependencies = [
  "chrono-tz",
  "cities-json",
  "iso_country",
- "once_cell",
  "strsim",
  "tzf-rs",
 ]
