@@ -1,9 +1,19 @@
 use chrono::offset::Offset;
 use chrono::{DateTime, Datelike, LocalResult, NaiveDate, TimeZone};
-use chrono_tz::{America::New_York, Tz};
+use chrono_tz::Tz;
 use std::f64::consts::PI;
 
-pub const LONGITUDE_NYC: f64 = -77.006;
+#[derive(Copy, Clone)]
+pub struct Location {
+    pub timezone: Tz,
+    pub longitude: f64,
+}
+
+impl Location {
+    pub fn new(timezone: Tz, longitude: f64) -> Self {
+        Self { timezone, longitude }
+    }
+}
 const MINUTES_PER_DAY: f64 = 1_440.0;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 const MINUTES_PER_HOUR: f64 = 60.0;
@@ -14,16 +24,15 @@ const SECONDS_PER_MINUTE: i64 = 60;
 const JULIAN_DAY_J2000: f64 = 2_451_545.0;
 const JULIAN_DAYS_PER_CENTURY: f64 = 36_525.0;
 
-/// Returns the solar noon instant for NYC (`America/New_York`) on the provided date.
-pub fn solar_noon_datetime(date: NaiveDate) -> DateTime<Tz> {
-    let tz: Tz = New_York;
-    let timezone_hours = timezone_offset_hours(tz, date);
+/// Returns the solar noon instant for the provided date at the requested location.
+pub fn solar_noon_datetime(location: Location, date: NaiveDate) -> DateTime<Tz> {
+    let timezone_hours = timezone_offset_hours(location.timezone, date);
     let jd = julian_day(date);
-    let sol_noon_minutes = calc_sol_noon(jd, LONGITUDE_NYC, timezone_hours);
+    let sol_noon_minutes = calc_sol_noon(jd, location.longitude, timezone_hours);
     let (hour, minute, second) = minutes_to_hms(sol_noon_minutes);
 
     zoned_time(
-        tz,
+        location.timezone,
         date,
         hour,
         minute,
@@ -164,11 +173,27 @@ fn rad_to_deg(radians: f64) -> f64 {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use chrono_tz::America::New_York;
 
-    fn assert_solar_noon(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) {
+    const NYC_LONGITUDE: f64 = -77.006;
+
+    fn nyc() -> Location {
+        Location::new(New_York, NYC_LONGITUDE)
+    }
+
+    fn assert_solar_noon(
+        location: Location,
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) {
         let date = NaiveDate::from_ymd_opt(year, month, day).expect("valid date");
-        let actual = solar_noon_datetime(date);
-        let expected = New_York
+        let actual = solar_noon_datetime(location, date);
+        let expected = location
+            .timezone
             .with_ymd_and_hms(year, month, day, hour, minute, second)
             .single()
             .expect("expected instant to exist");
@@ -187,16 +212,16 @@ mod tests {
 
     #[test]
     fn matches_noaa_october_2025() {
-        assert_solar_noon(2025, 10, 17, 12, 53, 22);
+        assert_solar_noon(nyc(), 2025, 10, 17, 12, 53, 22);
     }
 
     #[test]
     fn matches_noaa_december_2024() {
-        assert_solar_noon(2024, 12, 21, 12, 6, 12);
+        assert_solar_noon(nyc(), 2024, 12, 21, 12, 6, 12);
     }
 
     #[test]
     fn matches_noaa_june_2024() {
-        assert_solar_noon(2024, 6, 21, 13, 9, 53);
+        assert_solar_noon(nyc(), 2024, 6, 21, 13, 9, 53);
     }
 }

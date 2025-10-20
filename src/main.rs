@@ -1,10 +1,11 @@
 use chrono::{NaiveDate, Utc};
 use chrono_tz::America::New_York;
-use noon::solar_noon_datetime;
+use noon::{solar_noon_datetime, Location};
 use std::env;
 
 fn main() {
-    let tz = New_York;
+    const NYC_LONGITUDE: f64 = -77.006;
+    let location = Location::new(New_York, NYC_LONGITUDE);
     let args: Vec<String> = env::args().collect();
     let target_date = if args.len() > 1 {
         match NaiveDate::parse_from_str(&args[1], "%Y-%m-%d") {
@@ -18,10 +19,10 @@ fn main() {
             }
         }
     } else {
-        Utc::now().with_timezone(&tz).date_naive()
+        Utc::now().with_timezone(&location.timezone).date_naive()
     };
 
-    let local_noon = solar_noon_datetime(target_date);
+    let local_noon = solar_noon_datetime(location, target_date);
 
     println!(
         "Solar noon for NYC on {} occurs at {} ({}).",
