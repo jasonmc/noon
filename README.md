@@ -71,8 +71,8 @@ With Nix flakes available:
 
 ```bash
 nix develop       # enter a shell with rustc/cargo tooling
-nix build         # build the CLI via crane
-nix flake check   # build + run tests via cargo-nextest
+nix build         # build the CLI via rustPlatform.buildRustPackage
+nix flake check   # build + run tests via cargo test
 ```
 
 Contributions should maintain parity with NOAA’s reference results for NYC before submission.***
