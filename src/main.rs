@@ -1,5 +1,9 @@
-use chrono::{NaiveDate, Utc};
-use noon::{LocationLookupError, resolve_city, solar_noon_datetime};
+use chrono::{DateTime, NaiveDate, Utc};
+use chrono_tz::Tz;
+use noon::{
+    DaylightWindow, LocationLookupError, resolve_city, solar_noon_datetime,
+    sunrise_sunset_datetimes,
+};
 use std::env;
 
 const DEFAULT_CITY: &str = "New York City";
@@ -36,17 +40,25 @@ fn main() {
     let target_date =
         date_override.unwrap_or_else(|| Utc::now().with_timezone(&timezone).date_naive());
 
+    let daylight = sunrise_sunset_datetimes(resolved.location, target_date);
     let local_noon = solar_noon_datetime(resolved.location, target_date);
 
+    let (sunrise_text, sunset_text) = describe_daylight(&daylight);
+
     println!(
-        "Solar noon for {}, {} on {} occurs at {} ({}) in {}.",
+        "Solar events for {}, {} on {} in {}:",
         resolved.city_name,
         resolved.country_code,
         target_date.format("%Y-%m-%d"),
-        local_noon.format("%H:%M:%S"),
-        local_noon.format("%Z"),
         resolved.timezone_name
     );
+    println!("  Sunrise: {}", sunrise_text);
+    println!(
+        "  Solar noon: {} ({})",
+        local_noon.format("%H:%M:%S"),
+        local_noon.format("%Z")
+    );
+    println!("  Sunset: {}", sunset_text);
 }
 
 fn report_city_error(query: &str, error: &LocationLookupError) {
@@ -70,4 +82,28 @@ fn report_city_error(query: &str, error: &LocationLookupError) {
         }
         _ => {}
     }
+}
+
+fn describe_daylight(daylight: &DaylightWindow) -> (String, String) {
+    match daylight {
+        DaylightWindow::Daylight { sunrise, sunset } => {
+            (format_timestamp(sunrise), format_timestamp(sunset))
+        }
+        DaylightWindow::SunNeverRises => {
+            let msg = "Sun remains below the horizon all day".to_string();
+            (msg.clone(), msg)
+        }
+        DaylightWindow::SunNeverSets => {
+            let msg = "Sun remains above the horizon all day".to_string();
+            (msg.clone(), msg)
+        }
+    }
+}
+
+fn format_timestamp(timestamp: &DateTime<Tz>) -> String {
+    format!(
+        "{} ({})",
+        timestamp.format("%H:%M:%S"),
+        timestamp.format("%Z")
+    )
 }

@@ -1,6 +1,6 @@
 # Noon
 
-CLI utility that calculates the solar noon for New York City’s reference longitude (`-77.006°`) using a Rust port of the NOAA Solar Position Algorithm.
+CLI utility that reports sunrise, solar noon, and sunset for any city in the bundled dataset using a Rust port of the NOAA Solar Position Algorithm.
 
 ## Prerequisites
 
@@ -9,17 +9,18 @@ CLI utility that calculates the solar noon for New York City’s reference longi
 ## Usage
 
 ```bash
-cargo run              # solar noon for today in NYC
-cargo run 2025-12-21   # solar noon for a specific date (YYYY-MM-DD)
+cargo run                       # sunrise/noon/sunset for today in NYC
+cargo run "San Francisco"       # different city (auto-detected country)
+cargo run "Paris, FR" 2025-12-21 # explicit city + ISO country code + date
 ```
 
-The program prints the local solar-noon timestamp along with the timezone abbreviation that applies on that date (EST/EDT).
+The program prints the local sunrise, solar noon, and sunset timestamps along with the timezone abbreviations that apply on that date.
 
 ## Implementation Notes
 
-- `src/lib.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime`.
-- `src/main.rs` is a thin CLI wrapper that parses an optional `YYYY-MM-DD` argument and prints the NYC solar noon via the shared helper.
-- `src/lib.rs` also contains regression tests that pin representative seasonal dates to NOAA’s published values.
+- `src/lib.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime` plus `sunrise_sunset_datetimes`.
+- `src/main.rs` is a thin CLI wrapper that parses an optional `YYYY-MM-DD` argument plus a city name and prints all three solar events.
+- `src/lib.rs` also contains regression tests that pin representative seasonal dates (noon, sunrise, sunset) to reference values.
 
 ## Mathematical Background
 
@@ -55,7 +56,7 @@ Each of those quantities is computed using the same series expansions NOAA publi
 
 ## Limitations
 
-- The longitude is fixed to NYC. Extending the program to arbitrary locations would only require parameterizing `LONGITUDE_NYC` and adding latitude-dependent refraction/sunrise logic.
+- Sunrise/sunset calculations use the standard -0.833° zenith (atmospheric refraction + solar radius) and do not model additional twilight definitions.
 - No persistent caching of timezone transitions; every run queries `chrono-tz` for the applicable offset.
 
 ## Development

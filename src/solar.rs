@@ -13,22 +13,60 @@ const SECONDS_PER_HOUR: i64 = 3_600;
 const SECONDS_PER_MINUTE: i64 = 60;
 const JULIAN_DAY_J2000: f64 = 2_451_545.0;
 const JULIAN_DAYS_PER_CENTURY: f64 = 36_525.0;
+const SUNRISE_SUNSET_ZENITH_DEGREES: f64 = 90.833;
+const HOUR_ANGLE_EPSILON: f64 = 1e-12;
+
+#[derive(Debug, Clone)]
+pub enum DaylightWindow {
+    Daylight {
+        sunrise: DateTime<Tz>,
+        sunset: DateTime<Tz>,
+    },
+    SunNeverRises,
+    SunNeverSets,
+}
 
 /// Returns the solar noon instant for the provided date at the requested location.
 pub fn solar_noon_datetime(location: Location, date: NaiveDate) -> DateTime<Tz> {
     let timezone_hours = timezone_offset_hours(location.timezone, date);
     let jd = julian_day(date);
-    let sol_noon_minutes = calc_sol_noon(jd, location.longitude, timezone_hours);
-    let (hour, minute, second) = minutes_to_hms(sol_noon_minutes);
-
-    zoned_time(
-        location.timezone,
+    let sol_noon = calc_sol_noon(jd, location.longitude, timezone_hours);
+    minutes_to_datetime(
+        location,
         date,
-        hour,
-        minute,
-        second,
+        sol_noon.minutes,
         "unable to resolve solar noon",
     )
+}
+
+/// Returns the sunrise and sunset instants for the provided date/location.
+pub fn sunrise_sunset_datetimes(location: Location, date: NaiveDate) -> DaylightWindow {
+    let timezone_hours = timezone_offset_hours(location.timezone, date);
+    let jd = julian_day(date);
+    let sol_noon = calc_sol_noon(jd, location.longitude, timezone_hours);
+    let solar_declination = calc_solar_declination(sol_noon.julian_century);
+
+    match calc_hour_angle(location.latitude, solar_declination) {
+        HourAngle::Normal(degrees) => {
+            let delta_minutes = degrees * MINUTES_PER_DEGREE;
+            DaylightWindow::Daylight {
+                sunrise: minutes_to_datetime(
+                    location,
+                    date,
+                    sol_noon.minutes - delta_minutes,
+                    "unable to resolve sunrise",
+                ),
+                sunset: minutes_to_datetime(
+                    location,
+                    date,
+                    sol_noon.minutes + delta_minutes,
+                    "unable to resolve sunset",
+                ),
+            }
+        }
+        HourAngle::SunAlwaysAbove => DaylightWindow::SunNeverSets,
+        HourAngle::SunAlwaysBelow => DaylightWindow::SunNeverRises,
+    }
 }
 
 fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> f64 {
@@ -69,6 +107,16 @@ fn minutes_to_hms(minutes: f64) -> (u32, u32, u32) {
     (hour, minute, second)
 }
 
+fn minutes_to_datetime(
+    location: Location,
+    date: NaiveDate,
+    minutes: f64,
+    context: &str,
+) -> DateTime<Tz> {
+    let (hour, minute, second) = minutes_to_hms(minutes);
+    zoned_time(location.timezone, date, hour, minute, second, context)
+}
+
 fn julian_day(date: NaiveDate) -> f64 {
     let mut y = date.year() as f64;
     let mut m = date.month() as f64;
@@ -85,8 +133,13 @@ fn julian_day(date: NaiveDate) -> f64 {
     (365.25 * (y + 4716.0)).floor() + (30.6001 * (m + 1.0)).floor() + d + b - 1524.5
 }
 
+struct SolarNoonDetails {
+    minutes: f64,
+    julian_century: f64,
+}
+
 /// Returns the solar-noon minute count (local time) for the provided day and longitude.
-fn calc_sol_noon(jd: f64, longitude: f64, timezone: f64) -> f64 {
+fn calc_sol_noon(jd: f64, longitude: f64, timezone: f64) -> SolarNoonDetails {
     let t_noon = calc_time_julian_cent(jd - longitude / 360.0);
     let mut eq_time = calc_equation_of_time(t_noon);
     let sol_noon_offset = SOLAR_NOON_BASE_MINUTES - (longitude * MINUTES_PER_DEGREE) - eq_time;
@@ -94,9 +147,12 @@ fn calc_sol_noon(jd: f64, longitude: f64, timezone: f64) -> f64 {
     let new_t = calc_time_julian_cent(jd - 0.5 + sol_noon_offset / MINUTES_PER_DAY);
     eq_time = calc_equation_of_time(new_t);
 
-    (SOLAR_NOON_BASE_MINUTES - (longitude * MINUTES_PER_DEGREE) - eq_time
-        + (timezone * MINUTES_PER_HOUR))
-        .rem_euclid(MINUTES_PER_DAY)
+    SolarNoonDetails {
+        minutes: (SOLAR_NOON_BASE_MINUTES - (longitude * MINUTES_PER_DEGREE) - eq_time
+            + (timezone * MINUTES_PER_HOUR))
+            .rem_euclid(MINUTES_PER_DAY),
+        julian_century: new_t,
+    }
 }
 
 fn calc_time_julian_cent(jd: f64) -> f64 {
@@ -125,6 +181,34 @@ fn calc_equation_of_time(t: f64) -> f64 {
         - 1.25 * e * e * sin2m;
 
     rad_to_deg(e_time) * MINUTES_PER_DEGREE
+}
+
+fn calc_solar_declination(t: f64) -> f64 {
+    let epsilon = calc_obliquity_correction(t);
+    let lambda = calc_sun_apparent_long(t);
+    let sint = deg_to_rad(epsilon).sin() * deg_to_rad(lambda).sin();
+    rad_to_deg(sint.asin())
+}
+
+fn calc_sun_apparent_long(t: f64) -> f64 {
+    let omega = 125.04 - 1934.136 * t;
+    calc_sun_true_long(t) - 0.00569 - 0.00478 * deg_to_rad(omega).sin()
+}
+
+fn calc_sun_true_long(t: f64) -> f64 {
+    calc_geom_mean_long_sun(t) + calc_sun_eq_of_center(t)
+}
+
+fn calc_sun_eq_of_center(t: f64) -> f64 {
+    let m = calc_geom_mean_anomaly_sun(t);
+    let m_rad = deg_to_rad(m);
+    let sinm = m_rad.sin();
+    let sin2m = (2.0 * m_rad).sin();
+    let sin3m = (3.0 * m_rad).sin();
+
+    sinm * (1.914_602 - t * (0.004_817 + 0.000_014 * t))
+        + sin2m * (0.019_993 - 0.000_101 * t)
+        + sin3m * 0.000_289
 }
 
 fn calc_geom_mean_long_sun(t: f64) -> f64 {
@@ -159,17 +243,53 @@ fn rad_to_deg(radians: f64) -> f64 {
     radians * 180.0 / PI
 }
 
+enum HourAngle {
+    Normal(f64),
+    SunAlwaysAbove,
+    SunAlwaysBelow,
+}
+
+fn calc_hour_angle(latitude: f64, solar_declination: f64) -> HourAngle {
+    let lat_rad = deg_to_rad(latitude);
+    let decl_rad = deg_to_rad(solar_declination);
+    let zenith_rad = deg_to_rad(SUNRISE_SUNSET_ZENITH_DEGREES);
+    let numerator = zenith_rad.cos() - lat_rad.sin() * decl_rad.sin();
+    let denominator = lat_rad.cos() * decl_rad.cos();
+
+    if denominator.abs() < HOUR_ANGLE_EPSILON {
+        return if numerator > 0.0 {
+            HourAngle::SunAlwaysBelow
+        } else {
+            HourAngle::SunAlwaysAbove
+        };
+    }
+
+    let cos_h = numerator / denominator;
+
+    if cos_h > 1.0 {
+        HourAngle::SunAlwaysBelow
+    } else if cos_h < -1.0 {
+        HourAngle::SunAlwaysAbove
+    } else {
+        HourAngle::Normal(rad_to_deg(cos_h.acos()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::resolve_city;
     use chrono::NaiveDate;
-    use chrono_tz::America::New_York;
+    use chrono_tz::{America::New_York, UTC};
 
     fn nyc_location() -> Location {
         resolve_city("New York City")
             .expect("NYC should resolve")
             .location
+    }
+
+    fn equator_location() -> Location {
+        Location::new(UTC, 0.0, 0.0)
     }
 
     fn assert_solar_noon(
@@ -200,6 +320,61 @@ mod tests {
         );
     }
 
+    fn assert_daylight_span(
+        location: Location,
+        year: i32,
+        month: u32,
+        day: u32,
+        sunrise: (u32, u32, u32),
+        sunset: (u32, u32, u32),
+    ) {
+        let date = NaiveDate::from_ymd_opt(year, month, day).expect("valid date");
+        let daylight = sunrise_sunset_datetimes(location, date);
+
+        match daylight {
+            DaylightWindow::Daylight {
+                sunrise: actual_rise,
+                sunset: actual_set,
+            } => {
+                let expected_rise = expected_datetime(location, date, sunrise);
+                let expected_set = expected_datetime(location, date, sunset);
+                assert_eq!(
+                    actual_rise,
+                    expected_rise,
+                    "sunrise mismatch on {} (expected {:02}:{:02}:{:02}, got {})",
+                    date,
+                    sunrise.0,
+                    sunrise.1,
+                    sunrise.2,
+                    actual_rise.format("%H:%M:%S %Z"),
+                );
+                assert_eq!(
+                    actual_set,
+                    expected_set,
+                    "sunset mismatch on {} (expected {:02}:{:02}:{:02}, got {})",
+                    date,
+                    sunset.0,
+                    sunset.1,
+                    sunset.2,
+                    actual_set.format("%H:%M:%S %Z"),
+                );
+            }
+            other => panic!("expected daylight window on {date}, got {other:?}"),
+        }
+    }
+
+    fn expected_datetime(
+        location: Location,
+        date: NaiveDate,
+        hms: (u32, u32, u32),
+    ) -> DateTime<Tz> {
+        location
+            .timezone
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), hms.0, hms.1, hms.2)
+            .single()
+            .expect("expected instant to exist")
+    }
+
     #[test]
     fn matches_noaa_october_2025() {
         assert_solar_noon(nyc_location(), 2025, 10, 17, 12, 41, 22);
@@ -213,5 +388,30 @@ mod tests {
     #[test]
     fn matches_noaa_june_2024() {
         assert_solar_noon(nyc_location(), 2024, 6, 21, 12, 57, 53);
+    }
+
+    #[test]
+    fn sunrise_and_sunset_match_equatorial_equinox() {
+        assert_daylight_span(equator_location(), 2024, 3, 20, (6, 4, 6), (18, 10, 46));
+    }
+
+    #[test]
+    fn detects_midnight_sun() {
+        let location = Location::new(UTC, 78.0, 15.0);
+        let date = NaiveDate::from_ymd_opt(2024, 6, 21).expect("valid date");
+        match sunrise_sunset_datetimes(location, date) {
+            DaylightWindow::SunNeverSets => {}
+            other => panic!("expected midnight sun, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detects_polar_night() {
+        let location = Location::new(UTC, -78.0, 15.0);
+        let date = NaiveDate::from_ymd_opt(2024, 6, 21).expect("valid date");
+        match sunrise_sunset_datetimes(location, date) {
+            DaylightWindow::SunNeverRises => {}
+            other => panic!("expected polar night, got {other:?}"),
+        }
     }
 }

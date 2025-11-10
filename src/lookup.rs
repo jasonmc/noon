@@ -125,7 +125,7 @@ pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
     })?;
 
     Ok(CityLocation {
-        location: Location::new(timezone, city.lng),
+        location: Location::new(timezone, city.lat, city.lng),
         city_name: city.name.clone(),
         country_code: city.country.clone(),
         latitude: city.lat,
