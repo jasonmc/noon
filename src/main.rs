@@ -1,31 +1,32 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
+use clap::Parser;
 use noon::{
     DaylightWindow, LocationLookupError, SolarComputationError, resolve_city, solar_noon_datetime,
     sunrise_sunset_datetimes,
 };
-use std::env;
 
 const DEFAULT_CITY: &str = "New York City";
 
+#[derive(Parser, Debug)]
+#[command(
+    name = "noon",
+    about = "Report sunrise, solar noon, and sunset for a city and date"
+)]
+struct Cli {
+    #[arg(long, value_name = "YYYY-MM-DD", value_parser = parse_date)]
+    date: Option<NaiveDate>,
+
+    #[arg(value_name = "CITY", num_args = 0..)]
+    city: Vec<String>,
+}
+
 fn main() {
-    let mut args: Vec<String> = env::args().skip(1).collect();
-
-    let date_override = match args.last().cloned() {
-        Some(candidate) => match NaiveDate::parse_from_str(&candidate, "%Y-%m-%d") {
-            Ok(date) => {
-                args.pop();
-                Some(date)
-            }
-            Err(_) => None,
-        },
-        None => None,
-    };
-
-    let city_query = if args.is_empty() {
+    let cli = Cli::parse();
+    let city_query = if cli.city.is_empty() {
         DEFAULT_CITY.to_string()
     } else {
-        args.join(" ")
+        cli.city.join(" ")
     };
 
     let resolved = match resolve_city(&city_query) {
@@ -37,8 +38,9 @@ fn main() {
     };
 
     let timezone = resolved.location.timezone;
-    let target_date =
-        date_override.unwrap_or_else(|| Utc::now().with_timezone(&timezone).date_naive());
+    let target_date = cli
+        .date
+        .unwrap_or_else(|| Utc::now().with_timezone(&timezone).date_naive());
 
     let daylight = match sunrise_sunset_datetimes(resolved.location, target_date) {
         Ok(daylight) => daylight,
@@ -71,6 +73,11 @@ fn main() {
         local_noon.format("%Z")
     );
     println!("  Sunset: {}", sunset_text);
+}
+
+fn parse_date(input: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(input, "%Y-%m-%d")
+        .map_err(|_| format!("invalid date '{input}', expected YYYY-MM-DD"))
 }
 
 fn report_city_error(query: &str, error: &LocationLookupError) {

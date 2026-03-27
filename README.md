@@ -9,9 +9,9 @@ CLI utility that reports sunrise, solar noon, and sunset for any city in the bun
 ## Usage
 
 ```bash
-cargo run                       # sunrise/noon/sunset for today in NYC
-cargo run "San Francisco"       # different city (auto-detected country)
-cargo run "Paris, FR" 2025-12-21 # explicit city + ISO country code + date
+cargo run --                            # sunrise/noon/sunset for today in NYC
+cargo run -- San Francisco              # different city (auto-detected country)
+cargo run -- --date 2025-12-21 "Paris, FR" # explicit city + ISO country code + date
 ```
 
 The program prints the local sunrise, solar noon, and sunset timestamps along with the timezone abbreviations that apply on that date.
@@ -19,7 +19,7 @@ The program prints the local sunrise, solar noon, and sunset timestamps along wi
 ## Implementation Notes
 
 - `src/lib.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime` plus `sunrise_sunset_datetimes`.
-- `src/main.rs` is a thin CLI wrapper that parses an optional `YYYY-MM-DD` argument plus a city name and prints all three solar events.
+- `src/main.rs` is a thin CLI wrapper built on `clap` that accepts `--date YYYY-MM-DD` plus a city name and prints all three solar events.
 - `src/lib.rs` also contains regression tests that pin representative seasonal dates (noon, sunrise, sunset) to reference values.
 
 ## Mathematical Background
