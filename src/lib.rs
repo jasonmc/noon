@@ -21,4 +21,6 @@ impl Location {
 }
 
 pub use lookup::{CityLocation, LocationLookupError, resolve_city};
-pub use solar::{DaylightWindow, solar_noon_datetime, sunrise_sunset_datetimes};
+pub use solar::{
+    DaylightWindow, SolarComputationError, solar_noon_datetime, sunrise_sunset_datetimes,
+};

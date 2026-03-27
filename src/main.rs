@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use noon::{
-    DaylightWindow, LocationLookupError, resolve_city, solar_noon_datetime,
+    DaylightWindow, LocationLookupError, SolarComputationError, resolve_city, solar_noon_datetime,
     sunrise_sunset_datetimes,
 };
 use std::env;
@@ -40,8 +40,20 @@ fn main() {
     let target_date =
         date_override.unwrap_or_else(|| Utc::now().with_timezone(&timezone).date_naive());
 
-    let daylight = sunrise_sunset_datetimes(resolved.location, target_date);
-    let local_noon = solar_noon_datetime(resolved.location, target_date);
+    let daylight = match sunrise_sunset_datetimes(resolved.location, target_date) {
+        Ok(daylight) => daylight,
+        Err(err) => {
+            report_solar_error(&resolved.city_name, target_date, &err);
+            std::process::exit(1);
+        }
+    };
+    let local_noon = match solar_noon_datetime(resolved.location, target_date) {
+        Ok(local_noon) => local_noon,
+        Err(err) => {
+            report_solar_error(&resolved.city_name, target_date, &err);
+            std::process::exit(1);
+        }
+    };
 
     let (sunrise_text, sunset_text) = describe_daylight(&daylight);
 
@@ -82,6 +94,13 @@ fn report_city_error(query: &str, error: &LocationLookupError) {
         }
         _ => {}
     }
+}
+
+fn report_solar_error(city: &str, date: NaiveDate, error: &SolarComputationError) {
+    eprintln!(
+        "Unable to compute solar events for '{}' on {}: {}",
+        city, date, error
+    );
 }
 
 fn describe_daylight(daylight: &DaylightWindow) -> (String, String) {
