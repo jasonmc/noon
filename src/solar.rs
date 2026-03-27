@@ -328,7 +328,7 @@ mod tests {
     use super::*;
     use crate::resolve_city;
     use chrono::NaiveDate;
-    use chrono_tz::{America::New_York, UTC};
+    use chrono_tz::UTC;
 
     fn nyc_location() -> Location {
         resolve_city("New York City")
@@ -351,10 +351,7 @@ mod tests {
     ) {
         let date = NaiveDate::from_ymd_opt(year, month, day).expect("valid date");
         let actual = solar_noon_datetime(location, date).expect("solar noon should resolve");
-        let expected = New_York
-            .with_ymd_and_hms(year, month, day, hour, minute, second)
-            .single()
-            .expect("expected instant to exist");
+        let expected = expected_datetime(location, date, (hour, minute, second));
 
         assert_eq!(
             actual,
@@ -442,6 +439,11 @@ mod tests {
     #[test]
     fn sunrise_and_sunset_match_equatorial_equinox() {
         assert_daylight_span(equator_location(), 2024, 3, 20, (6, 4, 6), (18, 10, 46));
+    }
+
+    #[test]
+    fn solar_noon_helper_respects_location_timezone() {
+        assert_solar_noon(equator_location(), 2024, 3, 20, 12, 7, 26);
     }
 
     #[test]
