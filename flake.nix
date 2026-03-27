@@ -24,12 +24,26 @@
             mainProgram = "noon";
           };
         };
+
+        noon-tests = rustPlatform.buildRustPackage {
+          pname = "noon-tests";
+          version = "0.1.0";
+          src = lib.cleanSource ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          doCheck = true;
+          checkType = "debug";
+          # This check target exists only to make flake checks run cargo tests explicitly.
+          installPhase = ''
+            mkdir -p $out
+          '';
+        };
       in
       {
         packages.default = noon;
 
         checks = {
           noon = noon;
+          tests = noon-tests;
         };
 
         apps.default = {
