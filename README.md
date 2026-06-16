@@ -54,6 +54,16 @@ $$
 
 Each of those quantities is computed using the same series expansions NOAA publishes for the solar position model.
 
+```mermaid
+xychart-beta
+    title "Equation of Time: Apparent Solar Time - Mean Solar Time"
+    x-axis ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    y-axis "minutes" -15 --> 17
+    line [3, -14, -10, 0, 4, 0, -6, -6, 0, 14, 16, 2]
+```
+
+The equation of time is easiest to read as a drift curve. Positive values mean apparent solar time is ahead of mean solar time, so a sundial reaches noon before a uniform clock does. Negative values mean the apparent Sun is behind the clock. The curve crosses zero around mid-April, mid-June, early September, and late December because the two main effects, orbital eccentricity and axial tilt, sometimes cancel and sometimes reinforce each other.
+
 ## Limitations
 
 - Sunrise/sunset calculations use the standard -0.833° zenith (atmospheric refraction + solar radius) and do not model additional twilight definitions.
