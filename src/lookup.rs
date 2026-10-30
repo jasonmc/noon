@@ -8,9 +8,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use strsim::jaro_winkler;
-use tzf_rs::Finder;
+use tzf_rs::DefaultFinder;
 
-static TZ_FINDER: LazyLock<Finder> = LazyLock::new(Finder::new);
+static TZ_FINDER: LazyLock<DefaultFinder> = LazyLock::new(DefaultFinder::new);
 static COUNTRY_LOOKUP: LazyLock<HashMap<String, &'static str>> =
     LazyLock::new(build_country_lookup);
 static CITY_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
