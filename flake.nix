@@ -1,5 +1,5 @@
 {
-  description = "NYC solar noon calculator";
+  description = "CLI utility that reports sunrise, solar noon, and sunset for any city";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -18,7 +18,7 @@
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           meta = with lib; {
-            description = "NYC solar noon calculator";
+            description = "CLI utility that reports sunrise, solar noon, and sunset for any city";
             homepage = "https://github.com/jasonmc/noon";
             license = licenses.mit;
             mainProgram = "noon";

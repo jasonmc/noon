@@ -2,6 +2,9 @@
 name = "noon"
 version = "0.1.0"
 edition = "2024"
+description = "CLI utility that reports sunrise, solar noon, and sunset for any city"
+license = "MIT"
+repository = "https://github.com/jasonmc/noon"
 
 [dependencies]
 chrono = { version = "0.4", features = ["clock"] }

@@ -57,7 +57,7 @@ $$
 
 where:
 
-- $\lambda$ is longitude in degrees (NYC uses $-77.006^\circ$),
+- $\lambda$ is longitude in degrees (NYC uses $-74.006^\circ$),
 - $\Delta_\mathrm{tz}$ is the timezone offset in hours on the target day,
 - $\text{EoT}(T)$ is the equation of time in minutes, derived from
 
