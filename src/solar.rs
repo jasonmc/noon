@@ -110,6 +110,23 @@ pub fn sunrise_sunset_datetimes(
     }
 }
 
+/// Returns the geometric solar elevation angle in degrees (`[-90.0, 90.0]`)
+/// for `local_minutes` on `date`, given the location's `latitude` and `noon_minutes`.
+pub fn solar_elevation_degrees(
+    latitude: f64,
+    date: NaiveDate,
+    noon_minutes: f64,
+    local_minutes: f64,
+) -> f64 {
+    let t = calc_time_julian_cent(julian_day(date));
+    let decl = deg_to_rad(calc_solar_declination(t));
+    let lat = deg_to_rad(latitude);
+    let hour_angle = deg_to_rad((local_minutes - noon_minutes) / MINUTES_PER_DEGREE);
+
+    let sin_el = lat.sin() * decl.sin() + lat.cos() * decl.cos() * hour_angle.cos();
+    rad_to_deg(sin_el.clamp(-1.0, 1.0).asin())
+}
+
 fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> Result<f64, SolarComputationError> {
     let local_midday = zoned_time(
         tz,
@@ -464,5 +481,22 @@ mod tests {
             DaylightWindow::SunNeverRises => {}
             other => panic!("expected polar night, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn solar_elevation_peaks_near_zenith_at_equatorial_equinox_noon() {
+        let date = NaiveDate::from_ymd_opt(2024, 3, 20).expect("valid date");
+        let noon_minutes = 12.0 * 60.0 + 7.0 + 26.0 / 60.0;
+        let noon_elevation = solar_elevation_degrees(0.0, date, noon_minutes, noon_minutes);
+        let midnight_elevation = solar_elevation_degrees(0.0, date, noon_minutes, 0.0);
+
+        assert!(
+            noon_elevation > 89.5,
+            "expected equatorial equinox noon elevation near 90°, got {noon_elevation}"
+        );
+        assert!(
+            midnight_elevation < -85.0,
+            "expected midnight elevation deeply negative, got {midnight_elevation}"
+        );
     }
 }

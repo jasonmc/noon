@@ -2,9 +2,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use clap::Parser;
 use noon::{
-    DaylightWindow, LocationLookupError, SolarComputationError, resolve_city, solar_noon_datetime,
-    sunrise_sunset_datetimes,
+    DaylightWindow, LocationLookupError, SolarComputationError, render_solar_arc, resolve_city,
+    solar_noon_datetime, sunrise_sunset_datetimes,
 };
+use std::io::IsTerminal;
 
 const DEFAULT_CITY: &str = "New York City";
 
@@ -38,9 +39,9 @@ fn main() {
     };
 
     let timezone = resolved.location.timezone;
-    let target_date = cli
-        .date
-        .unwrap_or_else(|| Utc::now().with_timezone(&timezone).date_naive());
+    let now_in_tz = Utc::now().with_timezone(&timezone);
+    let target_date = cli.date.unwrap_or_else(|| now_in_tz.date_naive());
+    let current_time = (target_date == now_in_tz.date_naive()).then_some(now_in_tz);
 
     let daylight = match sunrise_sunset_datetimes(resolved.location, target_date) {
         Ok(daylight) => daylight,
@@ -58,6 +59,15 @@ fn main() {
     };
 
     let (sunrise_text, sunset_text) = describe_daylight(&daylight);
+    let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let chart = render_solar_arc(
+        resolved.location,
+        target_date,
+        &daylight,
+        local_noon,
+        current_time,
+        use_color,
+    );
 
     println!(
         "Solar events for {}, {} on {} in {}:",
@@ -73,6 +83,8 @@ fn main() {
         local_noon.format("%Z")
     );
     println!("  Sunset: {}", sunset_text);
+    println!();
+    println!("{chart}");
 }
 
 fn parse_date(input: &str) -> Result<NaiveDate, String> {

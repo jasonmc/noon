@@ -1,5 +1,6 @@
 mod lookup;
 mod solar;
+mod viz;
 
 use chrono_tz::Tz;
 
@@ -22,5 +23,7 @@ impl Location {
 
 pub use lookup::{CityLocation, LocationLookupError, resolve_city};
 pub use solar::{
-    DaylightWindow, SolarComputationError, solar_noon_datetime, sunrise_sunset_datetimes,
+    DaylightWindow, SolarComputationError, solar_elevation_degrees, solar_noon_datetime,
+    sunrise_sunset_datetimes,
 };
+pub use viz::render_solar_arc;

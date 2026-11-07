@@ -14,13 +14,38 @@ cargo run -- San Francisco              # different city (auto-detected country)
 cargo run -- --date 2025-12-21 "Paris, FR" # explicit city + ISO country code + date
 ```
 
-The program prints the local sunrise, solar noon, and sunset timestamps along with the timezone abbreviations that apply on that date.
+The program prints the local sunrise, solar noon, and sunset timestamps along with a 24-hour solar elevation arc showing the sun's altitude across the day, markers for sunrise (`▲`), solar noon (`●`), sunset (`▼`), and the current sun position (`◉`) when viewing today's date:
+
+```text
+Solar events for New York City, US on 2025-06-21 in America/New_York:
+  Sunrise: 05:25:01 (EDT)
+  Solar noon: 12:57:50 (EDT)
+  Sunset: 20:30:39 (EDT)
+
+  +90° ┤                                                
+       │                       ••●••                    
+  +60° ┤                    •••     •••                 
+       │                 •••           ••               
+  +30° ┤               ••                •••            
+       │           ••••                     ••••        
+    0° ┼──────────▲─────────────────────────────▼───────
+       │    ······                               ·····  
+  -30° ┤····                                          ··
+       │                                                
+  -60° ┤                                                
+       │                                                
+  -90° ┤                                                
+       └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴
+     00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00
+       ▲ Sunrise  ● Solar noon (+72.7°)  ▼ Sunset  •  Daylight: 15h 05m
+```
 
 ## Implementation Notes
 
-- `src/lib.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime` plus `sunrise_sunset_datetimes`.
-- `src/main.rs` is a thin CLI wrapper built on `clap` that accepts `--date YYYY-MM-DD` plus a city name and prints all three solar events.
-- `src/lib.rs` also contains regression tests that pin representative seasonal dates (noon, sunrise, sunset) to reference values.
+- `src/solar.rs` implements the NOAA solar position series (geometric mean longitude, anomaly, obliquity correction, equation of time, etc.) and exposes `solar_noon_datetime`, `sunrise_sunset_datetimes`, and `solar_elevation_degrees`.
+- `src/viz.rs` renders the 24-hour terminal solar elevation curve with automatic ANSI color detection (respecting `NO_COLOR` and non-TTY pipes).
+- `src/main.rs` is a thin CLI wrapper built on `clap` that accepts `--date YYYY-MM-DD` plus a city name and prints all three solar events along with the elevation chart.
+- `src/solar.rs` and `src/viz.rs` contain regression tests that pin representative seasonal dates (noon, sunrise, sunset, elevation, and chart rendering) to reference values.
 
 ## Mathematical Background
 
