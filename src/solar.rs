@@ -509,4 +509,47 @@ mod tests {
             "expected midnight elevation deeply negative, got {midnight_elevation}"
         );
     }
+
+    #[test]
+    fn equation_of_time_matches_seasonal_extrema() {
+        let feb = NaiveDate::from_ymd_opt(2026, 2, 11).expect("valid date");
+        let may = NaiveDate::from_ymd_opt(2026, 5, 14).expect("valid date");
+        let jul = NaiveDate::from_ymd_opt(2026, 7, 26).expect("valid date");
+        let nov = NaiveDate::from_ymd_opt(2026, 11, 3).expect("valid date");
+
+        let eot_feb = equation_of_time_minutes(feb);
+        let eot_may = equation_of_time_minutes(may);
+        let eot_jul = equation_of_time_minutes(jul);
+        let eot_nov = equation_of_time_minutes(nov);
+
+        assert!(
+            (-14.6..=-13.8).contains(&eot_feb),
+            "expected February EoT trough near -14.2m, got {eot_feb}"
+        );
+        assert!(
+            (3.4..=4.1).contains(&eot_may),
+            "expected May EoT minor peak near +3.7m, got {eot_may}"
+        );
+        assert!(
+            (-6.8..=-6.0).contains(&eot_jul),
+            "expected July EoT minor trough near -6.4m, got {eot_jul}"
+        );
+        assert!(
+            (16.0..=16.6).contains(&eot_nov),
+            "expected November EoT peak near +16.4m, got {eot_nov}"
+        );
+    }
+
+    #[test]
+    fn solar_declination_matches_solstices_and_equinoxes() {
+        let mar = NaiveDate::from_ymd_opt(2026, 3, 20).expect("valid date");
+        let jun = NaiveDate::from_ymd_opt(2026, 6, 21).expect("valid date");
+        let sep = NaiveDate::from_ymd_opt(2026, 9, 23).expect("valid date");
+        let dec = NaiveDate::from_ymd_opt(2026, 12, 21).expect("valid date");
+
+        assert!(solar_declination_degrees(mar).abs() < 0.6);
+        assert!((23.3..=23.5).contains(&solar_declination_degrees(jun)));
+        assert!(solar_declination_degrees(sep).abs() < 0.6);
+        assert!((-23.5..=-23.3).contains(&solar_declination_degrees(dec)));
+    }
 }

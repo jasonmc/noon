@@ -1,8 +1,9 @@
 use crate::Location;
 use crate::solar::{
     DaylightWindow, equation_of_time_minutes, solar_declination_degrees, solar_elevation_degrees,
+    sunrise_sunset_datetimes,
 };
-use chrono::{DateTime, Datelike, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Days, NaiveDate, Timelike};
 use chrono_tz::Tz;
 use std::fmt::Write;
 
@@ -213,7 +214,173 @@ pub fn render_solar_arc(
         let _ = write!(out, " Now ({}, {now_elev:+.1}°)", now.format("%H:%M"));
     }
 
+    if sign * solar_declination_degrees(date) < 0.0
+        && let DaylightWindow::Daylight { sunrise, sunset } = daylight
+    {
+        append_winter_outlook(&mut out, location, date, sunrise, sunset, sign, use_color);
+    }
+
     out
+}
+
+fn append_winter_outlook(
+    out: &mut String,
+    location: Location,
+    date: NaiveDate,
+    sunrise: &DateTime<Tz>,
+    sunset: &DateTime<Tz>,
+    sign: f64,
+    use_color: bool,
+) {
+    let day_span = |d: NaiveDate| -> Option<(i64, i64)> {
+        match sunrise_sunset_datetimes(location, d).ok()? {
+            DaylightWindow::Daylight { sunrise, sunset } => {
+                let dur = (sunset - sunrise).num_seconds().max(0);
+                let set_sec = i64::from(sunset.num_seconds_from_midnight());
+                Some((dur, set_sec))
+            }
+            _ => None,
+        }
+    };
+
+    let today_secs = (*sunset - *sunrise).num_seconds().max(0);
+    let today_set_sec = i64::from(sunset.num_seconds_from_midnight());
+
+    // Locate the winter solstice within ±100 days of `date`.
+    let solstice = (-100i64..=100)
+        .filter_map(|off| {
+            if off >= 0 {
+                date.checked_add_days(Days::new(off as u64))
+            } else {
+                date.checked_sub_days(Days::new((-off) as u64))
+            }
+        })
+        .min_by(|&a, &b| {
+            let da = sign
+                * (solar_declination_degrees(a)
+                    + solar_declination_degrees(a.succ_opt().unwrap_or(a)));
+            let db = sign
+                * (solar_declination_degrees(b)
+                    + solar_declination_degrees(b.succ_opt().unwrap_or(b)));
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(date);
+
+    let Some((min_secs, _)) = day_span(solstice) else {
+        return;
+    };
+
+    let summer_solstice = solstice
+        .checked_sub_days(Days::new(182))
+        .unwrap_or(solstice);
+    let max_secs = day_span(summer_solstice)
+        .map(|(s, _)| s)
+        .unwrap_or(today_secs);
+
+    // Earliest sunset occurs within ~20 days before the winter solstice.
+    let (earliest_set_date, earliest_set_sec) = (-25i64..=5)
+        .filter_map(|off| {
+            let d = if off >= 0 {
+                solstice.checked_add_days(Days::new(off as u64))?
+            } else {
+                solstice.checked_sub_days(Days::new((-off) as u64))?
+            };
+            let (_, set_sec) = day_span(d)?;
+            Some((d, set_sec))
+        })
+        .min_by_key(|&(_, set_sec)| set_sec)
+        .unwrap_or((solstice, today_set_sec));
+
+    out.push_str("\n       ");
+    paint(out, "❄", "\x1b[38;5;68m", use_color);
+
+    if date < solstice {
+        if date < earliest_set_date {
+            let days = (earliest_set_date - date).num_days();
+            let _ = write!(
+                out,
+                " Earliest sunset: {} at {:02}:{:02} (in {days}d)  •  ",
+                earliest_set_date.format("%b %d"),
+                earliest_set_sec / 3600,
+                (earliest_set_sec % 3600) / 60,
+            );
+        } else {
+            let gained_sec = (today_set_sec - earliest_set_sec).max(0);
+            if gained_sec >= 60 {
+                let _ = write!(
+                    out,
+                    " Earliest sunset passed {} (+{}m later now)  •  ",
+                    earliest_set_date.format("%b %d"),
+                    gained_sec / 60,
+                );
+            } else {
+                let _ = write!(
+                    out,
+                    " Earliest sunset passed {} (+{gained_sec}s later now)  •  ",
+                    earliest_set_date.format("%b %d"),
+                );
+            }
+        }
+
+        let days_to_sol = (solstice - date).num_days();
+        let rem_mins = ((today_secs - min_secs).max(0) + 59) / 60;
+        let pct_done = if max_secs > min_secs {
+            ((max_secs - today_secs) as f64 / (max_secs - min_secs) as f64 * 100.0)
+                .round()
+                .clamp(0.0, 99.0) as u32
+        } else {
+            100
+        };
+        let min_total_mins = min_secs / 60;
+        let _ = write!(
+            out,
+            "Solstice: {} ({}h {:02}m, in {days_to_sol}d — {rem_mins}m left, {pct_done}% of drop done)",
+            solstice.format("%b %d"),
+            min_total_mins / 60,
+            min_total_mins % 60,
+        );
+
+        if let Some(mirror) = (1u64..=100)
+            .filter_map(|off| solstice.checked_add_days(Days::new(off)))
+            .find(|&d| day_span(d).is_some_and(|(s, _)| s >= today_secs))
+        {
+            let days_to_mirror = (mirror - date).num_days();
+            let today_mins = today_secs / 60;
+            let _ = write!(
+                out,
+                "  •  {}h {:02}m returns: {} (in {days_to_mirror}d)",
+                today_mins / 60,
+                today_mins % 60,
+                mirror.format("%b %d"),
+            );
+        }
+    } else {
+        let gained_mins = (today_secs - min_secs).max(0) / 60;
+        let gained_set = (today_set_sec - earliest_set_sec).max(0) / 60;
+        let _ = write!(
+            out,
+            " Solstice passed {} (+{}h {:02}m daylight gained, sunset +{gained_set}m later)",
+            solstice.format("%b %d"),
+            gained_mins / 60,
+            gained_mins % 60,
+        );
+
+        if let Some(equinox) = (1u64..=100)
+            .filter_map(|off| date.checked_add_days(Days::new(off)))
+            .find(|&d| {
+                sign * (solar_declination_degrees(d)
+                    + solar_declination_degrees(d.succ_opt().unwrap_or(d)))
+                    >= 0.0
+            })
+        {
+            let days_to_eq = (equinox - date).num_days();
+            let _ = write!(
+                out,
+                "  •  Spring equinox: {} (in {days_to_eq}d)",
+                equinox.format("%b %d"),
+            );
+        }
+    }
 }
 
 fn to_minutes(dt: &DateTime<Tz>) -> f64 {
@@ -329,5 +496,95 @@ mod tests {
         assert_eq!(noon_row_for(nyc, 2024, 3, 20), 3);
         // NYC winter solstice (~25.9°) -> Row 4 (+30°)
         assert_eq!(noon_row_for(nyc, 2024, 12, 21), 4);
+    }
+
+    #[test]
+    fn includes_winter_outlook_only_in_autumn_and_winter() {
+        let nyc = Location::new(chrono_tz::America::New_York, 40.71427, -74.00597);
+        let render_on = |y: i32, m: u32, d: u32| {
+            let date = NaiveDate::from_ymd_opt(y, m, d).expect("valid date");
+            let daylight = sunrise_sunset_datetimes(nyc, date).expect("daylight");
+            let noon = solar_noon_datetime(nyc, date).expect("noon");
+            render_solar_arc(nyc, date, &daylight, noon, None, false)
+        };
+
+        // Phase 1: Before earliest sunset (Nov 7) -> counts down to earliest sunset, solstice, and mirror date.
+        let nov = render_on(2026, 11, 7);
+        assert!(nov.contains("Earliest sunset: Dec 08 at 16:28 (in 31d)"));
+        assert!(nov.contains("Solstice: Dec 21 (9h 15m, in 44d — 59m left, 83% of drop done)"));
+        assert!(nov.contains("10h 13m returns: Feb 05 (in 90d)"));
+
+        // Phase 2: Between earliest sunset and winter solstice (Dec 15) -> earliest sunset already passed!
+        let dec = render_on(2026, 12, 15);
+        assert!(dec.contains("Earliest sunset passed Dec 08 (+51s later now)"));
+        assert!(dec.contains("Solstice: Dec 21 (9h 15m, in 6d — 2m left, 99% of drop done)"));
+        assert!(dec.contains("9h 16m returns: Dec 29 (in 14d)"));
+
+        // Phase 3: After winter solstice (Jan 15) -> reports daylight gained and counts down to spring equinox.
+        let jan = render_on(2027, 1, 15);
+        assert!(
+            jan.contains("Solstice passed Dec 21 (+0h 19m daylight gained, sunset +23m later)")
+        );
+        assert!(jan.contains("Spring equinox: Mar 21 (in 65d)"));
+
+        // Summer (Jun 21) -> no winter outlook line rendered.
+        let jun = render_on(2026, 6, 21);
+        assert!(!jun.contains("Earliest sunset"));
+        assert!(!jun.contains("Solstice"));
+    }
+
+    #[test]
+    fn winter_outlook_and_analemma_adapt_to_southern_hemisphere() {
+        let sydney = Location::new(chrono_tz::Australia::Sydney, -33.8688, 151.2093);
+        let render_sydney = |y: i32, m: u32, d: u32| {
+            let date = NaiveDate::from_ymd_opt(y, m, d).expect("valid date");
+            let daylight = sunrise_sunset_datetimes(sydney, date).expect("daylight");
+            let noon = solar_noon_datetime(sydney, date).expect("noon");
+            render_solar_arc(sydney, date, &daylight, noon, None, false)
+        };
+
+        // In Sydney, May is late autumn (approaching the June winter solstice).
+        let may = render_sydney(2026, 5, 15);
+        assert!(may.contains("+80° ┤"));
+        assert!(may.contains("+33° ┤"));
+        assert!(may.contains("Earliest sunset: Jun"));
+        assert!(may.contains("Solstice: Jun 21"));
+
+        // July in Sydney is after the June winter solstice, climbing toward the September spring equinox.
+        let jul = render_sydney(2026, 7, 15);
+        assert!(jul.contains("Solstice passed Jun 21"));
+        assert!(jul.contains("Spring equinox: Sep 23"));
+
+        // December in Sydney is summer -> no winter outlook.
+        let dec = render_sydney(2026, 12, 21);
+        assert!(!dec.contains("Solstice"));
+    }
+
+    #[test]
+    fn analemma_places_target_marker_on_expected_row_and_lobe() {
+        let nyc = Location::new(UTC, 40.7128, -74.0060);
+        let analemma_marker_pos = |y: i32, m: u32, d: u32| -> (usize, usize) {
+            let date = NaiveDate::from_ymd_opt(y, m, d).expect("valid date");
+            let daylight = sunrise_sunset_datetimes(nyc, date).expect("daylight");
+            let noon = solar_noon_datetime(nyc, date).expect("noon");
+            let rendered = render_solar_arc(nyc, date, &daylight, noon, None, false);
+            rendered
+                .lines()
+                .take(ROWS)
+                .enumerate()
+                .find_map(|(r, line)| line.find('◉').map(|byte_idx| (r, byte_idx)))
+                .expect("analemma should contain ◉ target date marker")
+        };
+
+        let (jun_row, _) = analemma_marker_pos(2026, 6, 21);
+        let (dec_row, _) = analemma_marker_pos(2026, 12, 21);
+        let (_, feb_byte) = analemma_marker_pos(2026, 2, 11);
+        let (_, nov_byte) = analemma_marker_pos(2026, 11, 3);
+
+        // June solstice sits at the top of the analemma (row 0); December solstice sits at the bottom (row 12).
+        assert_eq!(jun_row, 0);
+        assert_eq!(dec_row, ROWS - 1);
+        // February EoT (-14.2m) is on the left lobe; November EoT (+16.4m) is on the right lobe.
+        assert!(feb_byte < nov_byte);
     }
 }
