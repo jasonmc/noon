@@ -10,7 +10,9 @@ repository = "https://github.com/jasonmc/noon"
 chrono = { version = "0.4", features = ["clock"] }
 chrono-tz = "0.10"
 clap = { version = "4.6", features = ["derive"] }
-cities-json = "0.6.8"
 iso_country = "0.1.4"
 strsim = "0.11"
 tzf-rs = { version = "2.1.3", default-features = false, features = ["bundled"] }
+
+[build-dependencies]
+cities-json = "0.6.8"

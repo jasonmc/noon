@@ -1,6 +1,5 @@
 use crate::Location;
 use chrono_tz::Tz;
-use cities_json::{CITIES, City as CityRecord};
 use iso_country::data;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -8,9 +7,11 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use strsim::jaro_winkler;
-use tzf_rs::DefaultFinder;
+use tzf_rs::EmbeddedFinder;
 
-static TZ_FINDER: LazyLock<DefaultFinder> = LazyLock::new(DefaultFinder::new);
+const CITIES_TSV: &str = include_str!(concat!(env!("OUT_DIR"), "/cities.tsv"));
+
+static TZ_FINDER: LazyLock<EmbeddedFinder> = LazyLock::new(EmbeddedFinder::new);
 static COUNTRY_LOOKUP: LazyLock<HashMap<String, &'static str>> =
     LazyLock::new(build_country_lookup);
 static CITY_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -18,6 +19,36 @@ static CITY_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::n
     aliases.insert("nyc", "New York City, US");
     aliases
 });
+
+#[derive(Debug, Clone, Copy)]
+struct CityRecord {
+    name: &'static str,
+    country: &'static str,
+    admin1: &'static str,
+    admin2: &'static str,
+    lat: f64,
+    lng: f64,
+}
+
+impl CityRecord {
+    fn from_tsv_line(line: &'static str) -> Option<Self> {
+        let mut fields = line.split('\t');
+        Some(Self {
+            name: fields.next()?,
+            country: fields.next()?,
+            admin1: fields.next()?,
+            admin2: fields.next()?,
+            lat: fields.next()?.parse().ok()?,
+            lng: fields.next()?.parse().ok()?,
+        })
+    }
+}
+
+fn city_lines() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CITIES_TSV
+        .lines()
+        .filter_map(|line| Some((line.split_once('\t')?.0, line)))
+}
 
 #[derive(Debug, Clone)]
 pub struct CityLocation {
@@ -116,7 +147,7 @@ pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
     let tz_name = TZ_FINDER.get_tz_name(city.lng, city.lat);
     if tz_name.is_empty() {
         return Err(LocationLookupError::TimezoneUnavailable {
-            city: describe_city(city),
+            city: describe_city(&city),
         });
     }
 
@@ -126,8 +157,8 @@ pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
 
     Ok(CityLocation {
         location: Location::new(timezone, city.lat, city.lng),
-        city_name: city.name.clone(),
-        country_code: city.country.clone(),
+        city_name: city.name.to_string(),
+        country_code: city.country.to_string(),
         latitude: city.lat,
         longitude: city.lng,
         timezone_name: tz_name.to_string(),
@@ -170,22 +201,33 @@ fn insert_country_name_variants(
     }
 }
 
-fn match_city(parsed: &ParsedQuery) -> Result<&'static CityRecord, LocationLookupError> {
+fn match_city(parsed: &ParsedQuery) -> Result<CityRecord, LocationLookupError> {
     let mut fallback = None;
 
-    let exact: Vec<&CityRecord> = CITIES
-        .iter()
-        .filter(|city| city.name.eq_ignore_ascii_case(&parsed.name))
-        .collect();
+    let name_bytes = parsed.name.as_bytes();
+    let name_len = name_bytes.len();
+    let exact: Vec<CityRecord> = if name_bytes.contains(&b'\t') {
+        Vec::new()
+    } else {
+        CITIES_TSV
+            .lines()
+            .filter(|line| {
+                let bytes = line.as_bytes();
+                bytes.get(name_len) == Some(&b'\t')
+                    && bytes[..name_len].eq_ignore_ascii_case(name_bytes)
+            })
+            .filter_map(CityRecord::from_tsv_line)
+            .collect()
+    };
 
     if let Some(result) = attempt_match(&exact, parsed, false, &mut fallback)? {
         return Ok(result);
     }
 
     if !parsed.abbreviation_tokens.is_empty() {
-        let abbreviation_matches: Vec<&CityRecord> = CITIES
-            .iter()
-            .filter(|city| abbreviation_match(parsed, city))
+        let abbreviation_matches: Vec<CityRecord> = city_lines()
+            .filter(|(name, _)| abbreviation_match(parsed, name))
+            .filter_map(|(_, line)| CityRecord::from_tsv_line(line))
             .collect();
 
         if let Some(result) = attempt_match(&abbreviation_matches, parsed, true, &mut fallback)? {
@@ -203,14 +245,12 @@ fn match_city(parsed: &ParsedQuery) -> Result<&'static CityRecord, LocationLooku
     }))
 }
 
-fn best_fuzzy_matches(parsed: &ParsedQuery) -> Vec<&'static CityRecord> {
-    let mut scored: Vec<(&CityRecord, f64)> = CITIES
-        .iter()
-        .map(|city| {
-            let score = jaro_winkler(&parsed.normalized_name, &city.name.to_ascii_lowercase());
-            (city, score)
+fn best_fuzzy_matches(parsed: &ParsedQuery) -> Vec<CityRecord> {
+    let mut scored: Vec<(CityRecord, f64)> = city_lines()
+        .filter_map(|(name, line)| {
+            let score = jaro_winkler(&parsed.normalized_name, &name.to_ascii_lowercase());
+            (score >= 0.8).then(|| Some((CityRecord::from_tsv_line(line)?, score)))?
         })
-        .filter(|(_, score)| *score >= 0.8)
         .collect();
 
     if scored.is_empty() {
@@ -228,18 +268,18 @@ fn best_fuzzy_matches(parsed: &ParsedQuery) -> Vec<&'static CityRecord> {
         .collect()
 }
 
-fn attempt_match<'a>(
-    candidates: &[&'a CityRecord],
+fn attempt_match(
+    candidates: &[CityRecord],
     parsed: &ParsedQuery,
     allow_ambiguity: bool,
     fallback: &mut Option<LocationLookupError>,
-) -> Result<Option<&'a CityRecord>, LocationLookupError> {
+) -> Result<Option<CityRecord>, LocationLookupError> {
     if candidates.is_empty() {
         return Ok(None);
     }
 
     let candidates = if let Some(code) = parsed.country_code.as_deref() {
-        let filtered: Vec<&CityRecord> = candidates
+        let filtered: Vec<CityRecord> = candidates
             .iter()
             .copied()
             .filter(|city| city.country.eq_ignore_ascii_case(code))
@@ -275,10 +315,10 @@ fn attempt_match<'a>(
     }
 }
 
-fn select_candidate<'a>(
-    candidates: &[&'a CityRecord],
+fn select_candidate(
+    candidates: &[CityRecord],
     parsed: &ParsedQuery,
-) -> Result<&'a CityRecord, LocationLookupError> {
+) -> Result<CityRecord, LocationLookupError> {
     match candidates {
         [] => Err(LocationLookupError::NotFound {
             query: parsed.original.clone(),
@@ -286,18 +326,18 @@ fn select_candidate<'a>(
         [single] => Ok(*single),
         many => Err(LocationLookupError::Ambiguous {
             query: parsed.original.clone(),
-            suggestions: many.iter().map(|city| describe_city(city)).collect(),
+            suggestions: many.iter().map(describe_city).collect(),
         }),
     }
 }
 
-fn unique_countries(candidates: &[&CityRecord]) -> Vec<String> {
+fn unique_countries(candidates: &[CityRecord]) -> Vec<String> {
     let mut seen = HashSet::new();
     candidates
         .iter()
         .filter_map(|city| {
-            if seen.insert(&city.country) {
-                Some(city.country.clone())
+            if seen.insert(city.country) {
+                Some(city.country.to_string())
             } else {
                 None
             }
@@ -305,10 +345,7 @@ fn unique_countries(candidates: &[&CityRecord]) -> Vec<String> {
         .collect()
 }
 
-fn refine_by_region<'a>(
-    candidates: &[&'a CityRecord],
-    region_hints: &[String],
-) -> Vec<&'a CityRecord> {
+fn refine_by_region(candidates: &[CityRecord], region_hints: &[String]) -> Vec<CityRecord> {
     let hints: Vec<String> = region_hints
         .iter()
         .map(|hint| hint.trim().to_ascii_lowercase())
@@ -370,13 +407,13 @@ fn abbreviation_tokens(value: &str) -> Vec<String> {
     tokens
 }
 
-fn abbreviation_match(parsed: &ParsedQuery, city: &CityRecord) -> bool {
+fn abbreviation_match(parsed: &ParsedQuery, city_name: &str) -> bool {
     if parsed.abbreviation_tokens.is_empty() {
         return false;
     }
 
     let cond_len = parsed.condensed_name.len();
-    let city_tokens = abbreviation_tokens(&city.name);
+    let city_tokens = abbreviation_tokens(city_name);
     if city_tokens.is_empty() {
         return false;
     }
@@ -389,7 +426,7 @@ fn abbreviation_match(parsed: &ParsedQuery, city: &CityRecord) -> bool {
 }
 
 fn describe_city(city: &CityRecord) -> String {
-    let country = city.country.as_str();
+    let country = city.country;
     let admin1 = city.admin1.trim();
     let admin2 = city.admin2.trim();
 
