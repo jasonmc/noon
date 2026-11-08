@@ -58,7 +58,6 @@ fn main() {
         }
     };
 
-    let (sunrise_text, sunset_text) = describe_daylight(&daylight);
     let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let chart = render_solar_arc(
         resolved.location,
@@ -70,19 +69,14 @@ fn main() {
     );
 
     println!(
-        "Solar events for {}, {} on {} in {}:",
+        "      {}, {}  •  {}  •  {} ({})",
         resolved.city_name,
         resolved.country_code,
         target_date.format("%Y-%m-%d"),
-        resolved.timezone_name
+        resolved.timezone_name,
+        local_noon.format("%Z"),
     );
-    println!("  Sunrise: {}", sunrise_text);
-    println!(
-        "  Solar noon: {} ({})",
-        local_noon.format("%H:%M:%S"),
-        local_noon.format("%Z")
-    );
-    println!("  Sunset: {}", sunset_text);
+    println!("      {}", describe_daylight(&daylight, &local_noon));
     println!();
     println!("{chart}");
 }
@@ -122,26 +116,19 @@ fn report_solar_error(city: &str, date: NaiveDate, error: &SolarComputationError
     );
 }
 
-fn describe_daylight(daylight: &DaylightWindow) -> (String, String) {
+fn describe_daylight(daylight: &DaylightWindow, local_noon: &DateTime<Tz>) -> String {
+    let noon = local_noon.format("%H:%M:%S");
     match daylight {
-        DaylightWindow::Daylight { sunrise, sunset } => {
-            (format_timestamp(sunrise), format_timestamp(sunset))
-        }
+        DaylightWindow::Daylight { sunrise, sunset } => format!(
+            "Sunrise: {}  •  Solar noon: {noon}  •  Sunset: {}",
+            sunrise.format("%H:%M:%S"),
+            sunset.format("%H:%M:%S"),
+        ),
         DaylightWindow::SunNeverRises => {
-            let msg = "Sun remains below the horizon all day".to_string();
-            (msg.clone(), msg)
+            format!("Solar noon: {noon}  •  Sun remains below the horizon all day")
         }
         DaylightWindow::SunNeverSets => {
-            let msg = "Sun remains above the horizon all day".to_string();
-            (msg.clone(), msg)
+            format!("Solar noon: {noon}  •  Sun remains above the horizon all day")
         }
     }
-}
-
-fn format_timestamp(timestamp: &DateTime<Tz>) -> String {
-    format!(
-        "{} ({})",
-        timestamp.format("%H:%M:%S"),
-        timestamp.format("%Z")
-    )
 }

@@ -12,23 +12,23 @@ const ROWS: usize = 13;
 const STEPS_PER_HEMISPHERE: usize = 6;
 const DEG_PER_ROW: f64 = 90.0 / STEPS_PER_HEMISPHERE as f64;
 const HORIZON_ROW: usize = STEPS_PER_HEMISPHERE;
-const ANA_COLS: usize = 25;
+const ANA_COLS: usize = 17;
 const ANA_MID: usize = ANA_COLS / 2;
 const MAX_DECL: f64 = 23.44;
 const Y_LABELS: [&str; ROWS] = [
-    "  +90° ┤",
-    "       │",
-    "  +60° ┤",
-    "       │",
-    "  +30° ┤",
-    "       │",
-    "    0° ┼",
-    "       │",
-    "  -30° ┤",
-    "       │",
-    "  -60° ┤",
-    "       │",
-    "  -90° ┤",
+    " +90° ┤",
+    "      │",
+    " +60° ┤",
+    "      │",
+    " +30° ┤",
+    "      │",
+    "   0° ┼",
+    "      │",
+    " -30° ┤",
+    "      │",
+    " -60° ┤",
+    "      │",
+    " -90° ┤",
 ];
 
 /// Renders a 24-hour solar elevation arc alongside the annual solar analemma.
@@ -116,7 +116,7 @@ pub fn render_solar_arc(
         let r = ((1.0 - sign * solar_declination_degrees(d) / MAX_DECL) * HORIZON_ROW as f64)
             .round()
             .clamp(0.0, (ROWS - 1) as f64) as usize;
-        let c = (ANA_MID as f64 + equation_of_time_minutes(d) / 1.5)
+        let c = (ANA_MID as f64 + equation_of_time_minutes(d) / 2.2)
             .round()
             .clamp(0.0, (ANA_COLS - 1) as f64) as usize;
         (r, c)
@@ -133,6 +133,12 @@ pub fn render_solar_arc(
     ana[tr][tc] = ("◉", "\x1b[1;96m");
 
     let mut out = String::new();
+    paint(
+        &mut out,
+        "       Daily Solar Arc (24h elevation)                        Annual Analemma\n",
+        "\x1b[90m",
+        use_color,
+    );
     for (row, label) in Y_LABELS.iter().enumerate() {
         paint(&mut out, label, "\x1b[90m", use_color);
         for &(pt_row, glyph, color) in &points {
@@ -148,11 +154,11 @@ pub fn render_solar_arc(
         let decl = sign * MAX_DECL * (1.0 - row as f64 / HORIZON_ROW as f64);
         let ana_elev = 90.0 - (location.latitude - decl).abs();
         let ana_label = if row == HORIZON_ROW {
-            format!("     {ana_elev:+3.0}° ┼")
+            format!(" {ana_elev:+3.0}° ┼")
         } else if row % 2 == 0 {
-            format!("     {ana_elev:+3.0}° ┤")
+            format!(" {ana_elev:+3.0}° ┤")
         } else {
-            "          │".to_string()
+            "      │".to_string()
         };
         paint(&mut out, &ana_label, "\x1b[90m", use_color);
         for &(glyph, color) in &ana[row] {
@@ -163,56 +169,68 @@ pub fn render_solar_arc(
 
     paint(
         &mut out,
-        "       └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴          └──┴────┴────┼────┴────┴──\n",
+        "      └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴      └─┴──────┼──────┴─\n",
         "\x1b[90m",
         use_color,
     );
     paint(
         &mut out,
-        "     00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00         -15m  -7m   0m  +7m  +15m\n",
+        "    00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00     -15m    0m   +15m\n",
         "\x1b[90m",
         use_color,
     );
 
     let eot = equation_of_time_minutes(date);
-    out.push_str("       ");
+    out.push_str("      ");
     match daylight {
         DaylightWindow::Daylight { sunrise, sunset } => {
             paint(&mut out, "▲", "\x1b[1;38;5;214m", use_color);
-            out.push_str(" Sunrise  ");
+            let _ = write!(out, " Sunrise {}  ", sunrise.format("%H:%M"));
             paint(&mut out, "●", "\x1b[1;93m", use_color);
-            let _ = write!(out, " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  ");
-            paint(&mut out, "▼", "\x1b[1;38;5;208m", use_color);
-            let mins = (*sunset - *sunrise).num_minutes().max(0);
             let _ = write!(
                 out,
-                " Sunset  •  Daylight: {}h {:02}m",
-                mins / 60,
-                mins % 60
+                " Noon {} ({noon_elev:+.1}°)  ",
+                solar_noon.format("%H:%M")
             );
+            paint(&mut out, "▼", "\x1b[1;38;5;208m", use_color);
+            let _ = write!(out, " Sunset {}", sunset.format("%H:%M"));
         }
         DaylightWindow::SunNeverRises => {
             paint(&mut out, "●", "\x1b[1;93m", use_color);
             let _ = write!(
                 out,
-                " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  •  Polar night (0h 00m daylight)"
+                " Noon {} ({noon_elev:+.1}°) • Polar night (0h 00m daylight)",
+                solar_noon.format("%H:%M")
             );
         }
         DaylightWindow::SunNeverSets => {
             paint(&mut out, "●", "\x1b[1;93m", use_color);
             let _ = write!(
                 out,
-                " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  •  Midnight sun (24h 00m daylight)"
+                " Noon {} ({noon_elev:+.1}°) • Midnight sun (24h 00m daylight)",
+                solar_noon.format("%H:%M")
             );
         }
     }
+    pad_to_col(&mut out, 62);
+    paint(&mut out, "◄ late · early ►", "\x1b[90m", use_color);
 
+    out.push_str("\n      ");
+    if let DaylightWindow::Daylight { sunrise, sunset } = daylight {
+        let mins = (*sunset - *sunrise).num_minutes().max(0);
+        let _ = write!(out, "Daylight: {}h {:02}m", mins / 60, mins % 60);
+        if current_time.is_some() {
+            out.push_str("  •  ");
+        }
+    }
     if let Some(now) = current_time {
         let now_elev = elev_at(to_minutes(&now));
-        out.push_str("  ");
         paint(&mut out, "◉", "\x1b[1;96m", use_color);
         let _ = write!(out, " Now ({}, {now_elev:+.1}°)", now.format("%H:%M"));
     }
+    pad_to_col(&mut out, 62);
+    paint(&mut out, "◉", "\x1b[1;96m", use_color);
+    let _ = write!(out, " {} ({eot:+.1}m)", date.format("%b %d"));
 
     if sign * solar_declination_degrees(date) < 0.0
         && let DaylightWindow::Daylight { sunrise, sunset } = daylight
@@ -291,7 +309,7 @@ fn append_winter_outlook(
         .min_by_key(|&(_, set_sec)| set_sec)
         .unwrap_or((solstice, today_set_sec));
 
-    out.push_str("\n       ");
+    out.push_str("\n      ");
     paint(out, "❄", "\x1b[38;5;68m", use_color);
 
     if date < solstice {
@@ -299,7 +317,7 @@ fn append_winter_outlook(
             let days = (earliest_set_date - date).num_days();
             let _ = write!(
                 out,
-                " Earliest sunset: {} at {:02}:{:02} (in {days}d)  •  ",
+                " Earliest sunset: {} at {:02}:{:02} (in {days}d)",
                 earliest_set_date.format("%b %d"),
                 earliest_set_sec / 3600,
                 (earliest_set_sec % 3600) / 60,
@@ -309,14 +327,14 @@ fn append_winter_outlook(
             if gained_sec >= 60 {
                 let _ = write!(
                     out,
-                    " Earliest sunset passed {} (+{}m later now)  •  ",
+                    " Earliest sunset passed {} (+{}m later)",
                     earliest_set_date.format("%b %d"),
                     gained_sec / 60,
                 );
             } else {
                 let _ = write!(
                     out,
-                    " Earliest sunset passed {} (+{gained_sec}s later now)  •  ",
+                    " Earliest sunset passed {} (+{gained_sec}s later)",
                     earliest_set_date.format("%b %d"),
                 );
             }
@@ -327,14 +345,17 @@ fn append_winter_outlook(
         let pct_done = if max_secs > min_secs {
             ((max_secs - today_secs) as f64 / (max_secs - min_secs) as f64 * 100.0)
                 .round()
-                .clamp(0.0, 99.0) as u32
+                .clamp(0.0, 99.0) as usize
         } else {
             100
         };
+        pad_to_col(out, 62);
+        render_progress_bar(out, pct_done, "▾", "\x1b[38;5;68m", use_color);
+
         let min_total_mins = min_secs / 60;
         let _ = write!(
             out,
-            "Solstice: {} ({}h {:02}m, in {days_to_sol}d — {rem_mins}m left, {pct_done}% of drop done)",
+            "\n        Solstice: {} ({}h {:02}m, {days_to_sol}d, -{rem_mins}m)",
             solstice.format("%b %d"),
             min_total_mins / 60,
             min_total_mins % 60,
@@ -348,7 +369,7 @@ fn append_winter_outlook(
             let today_mins = today_secs / 60;
             let _ = write!(
                 out,
-                "  •  {}h {:02}m returns: {} (in {days_to_mirror}d)",
+                " • {}h {:02}m returns: {} ({days_to_mirror}d)",
                 today_mins / 60,
                 today_mins % 60,
                 mirror.format("%b %d"),
@@ -359,7 +380,7 @@ fn append_winter_outlook(
         let gained_set = (today_set_sec - earliest_set_sec).max(0) / 60;
         let _ = write!(
             out,
-            " Solstice passed {} (+{}h {:02}m daylight gained, sunset +{gained_set}m later)",
+            " Solstice passed {} (+{}h {:02}m, sunset +{gained_set}m)",
             solstice.format("%b %d"),
             gained_mins / 60,
             gained_mins % 60,
@@ -373,13 +394,62 @@ fn append_winter_outlook(
                     >= 0.0
             })
         {
+            let total_days = (equinox - solstice).num_days().max(1);
+            let elapsed_days = (date - solstice).num_days().max(0);
+            let pct_climb = ((elapsed_days as f64 / total_days as f64) * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as usize;
+            pad_to_col(out, 62);
+            render_progress_bar(out, pct_climb, "▲", "\x1b[38;5;220m", use_color);
+
             let days_to_eq = (equinox - date).num_days();
             let _ = write!(
                 out,
-                "  •  Spring equinox: {} (in {days_to_eq}d)",
+                "\n        Spring equinox: {} (in {days_to_eq}d)",
                 equinox.format("%b %d"),
             );
         }
+    }
+}
+
+fn render_progress_bar(
+    out: &mut String,
+    pct: usize,
+    arrow: &str,
+    fill_color: &str,
+    use_color: bool,
+) {
+    let filled = (pct * 10 + 50) / 100;
+    let filled_str: String = std::iter::repeat_n('█', filled).collect();
+    let empty_str: String = std::iter::repeat_n('░', 10usize.saturating_sub(filled)).collect();
+    paint(out, &filled_str, fill_color, use_color);
+    paint(out, &empty_str, "\x1b[90m", use_color);
+    let _ = write!(out, " {pct:>2}% {arrow}");
+}
+
+fn col_width(line: &str) -> usize {
+    let mut in_esc = false;
+    line.chars()
+        .filter(|&c| {
+            if in_esc {
+                if c == 'm' {
+                    in_esc = false;
+                }
+                false
+            } else if c == '\x1b' {
+                in_esc = true;
+                false
+            } else {
+                true
+            }
+        })
+        .count()
+}
+
+fn pad_to_col(out: &mut String, col: usize) {
+    let line = out.rsplit('\n').next().unwrap_or(out);
+    for _ in col_width(line)..col {
+        out.push(' ');
     }
 }
 
@@ -421,7 +491,7 @@ mod tests {
         assert!(rendered.contains('●'));
         assert!(rendered.contains('▼'));
         assert!(rendered.contains("00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00"));
-        assert!(rendered.contains("-15m  -7m   0m  +7m  +15m"));
+        assert!(rendered.contains("-15m    0m   +15m"));
         assert!(!rendered.contains("\x1b["));
     }
 
@@ -484,6 +554,7 @@ mod tests {
             let rendered = render_solar_arc(location, date, &daylight, noon, None, false);
             rendered
                 .lines()
+                .skip(1)
                 .position(|line| line.contains('●'))
                 .expect("chart should contain solar noon marker")
         };
@@ -505,26 +576,38 @@ mod tests {
             let date = NaiveDate::from_ymd_opt(y, m, d).expect("valid date");
             let daylight = sunrise_sunset_datetimes(nyc, date).expect("daylight");
             let noon = solar_noon_datetime(nyc, date).expect("noon");
-            render_solar_arc(nyc, date, &daylight, noon, None, false)
+            let now = chrono_tz::America::New_York
+                .with_ymd_and_hms(y, m, d, 22, 40, 0)
+                .single();
+            let rendered = render_solar_arc(nyc, date, &daylight, noon, now, false);
+            for line in rendered.lines() {
+                assert!(
+                    line.chars().count() < 80,
+                    "line exceeds 79 cols ({} chars): {line}",
+                    line.chars().count()
+                );
+            }
+            rendered
         };
 
         // Phase 1: Before earliest sunset (Nov 7) -> counts down to earliest sunset, solstice, and mirror date.
         let nov = render_on(2026, 11, 7);
         assert!(nov.contains("Earliest sunset: Dec 08 at 16:28 (in 31d)"));
-        assert!(nov.contains("Solstice: Dec 21 (9h 15m, in 44d — 59m left, 83% of drop done)"));
-        assert!(nov.contains("10h 13m returns: Feb 05 (in 90d)"));
+        assert!(nov.contains("████████░░ 83% ▾"));
+        assert!(nov.contains("Solstice: Dec 21 (9h 15m, 44d, -59m)"));
+        assert!(nov.contains("10h 13m returns: Feb 05 (90d)"));
 
         // Phase 2: Between earliest sunset and winter solstice (Dec 15) -> earliest sunset already passed!
         let dec = render_on(2026, 12, 15);
-        assert!(dec.contains("Earliest sunset passed Dec 08 (+51s later now)"));
-        assert!(dec.contains("Solstice: Dec 21 (9h 15m, in 6d — 2m left, 99% of drop done)"));
-        assert!(dec.contains("9h 16m returns: Dec 29 (in 14d)"));
+        assert!(dec.contains("Earliest sunset passed Dec 08 (+51s later)"));
+        assert!(dec.contains("██████████ 99% ▾"));
+        assert!(dec.contains("Solstice: Dec 21 (9h 15m, 6d, -2m)"));
+        assert!(dec.contains("9h 16m returns: Dec 29 (14d)"));
 
         // Phase 3: After winter solstice (Jan 15) -> reports daylight gained and counts down to spring equinox.
         let jan = render_on(2027, 1, 15);
-        assert!(
-            jan.contains("Solstice passed Dec 21 (+0h 19m daylight gained, sunset +23m later)")
-        );
+        assert!(jan.contains("Solstice passed Dec 21 (+0h 19m, sunset +23m)"));
+        assert!(jan.contains("███░░░░░░░ 28% ▲"));
         assert!(jan.contains("Spring equinox: Mar 21 (in 65d)"));
 
         // Summer (Jun 21) -> no winter outlook line rendered.
@@ -570,6 +653,7 @@ mod tests {
             let rendered = render_solar_arc(nyc, date, &daylight, noon, None, false);
             rendered
                 .lines()
+                .skip(1)
                 .take(ROWS)
                 .enumerate()
                 .find_map(|(r, line)| line.find('◉').map(|byte_idx| (r, byte_idx)))
