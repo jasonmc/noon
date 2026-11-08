@@ -7,11 +7,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use strsim::jaro_winkler;
-use tzf_rs::EmbeddedFinder;
 
 const CITIES_TSV: &str = include_str!(concat!(env!("OUT_DIR"), "/cities.tsv"));
 
-static TZ_FINDER: LazyLock<EmbeddedFinder> = LazyLock::new(EmbeddedFinder::new);
 static COUNTRY_LOOKUP: LazyLock<HashMap<String, &'static str>> =
     LazyLock::new(build_country_lookup);
 static CITY_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -28,6 +26,7 @@ struct CityRecord {
     admin2: &'static str,
     lat: f64,
     lng: f64,
+    tz: &'static str,
 }
 
 impl CityRecord {
@@ -40,6 +39,7 @@ impl CityRecord {
             admin2: fields.next()?,
             lat: fields.next()?.parse().ok()?,
             lng: fields.next()?.parse().ok()?,
+            tz: fields.next()?,
         })
     }
 }
@@ -144,15 +144,14 @@ pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
     let parsed = ParsedQuery::parse(query)?;
     let city = match_city(&parsed)?;
 
-    let tz_name = TZ_FINDER.get_tz_name(city.lng, city.lat);
-    if tz_name.is_empty() {
+    if city.tz.is_empty() {
         return Err(LocationLookupError::TimezoneUnavailable {
             city: describe_city(&city),
         });
     }
 
-    let timezone = Tz::from_str(tz_name).map_err(|_| LocationLookupError::InvalidTimezone {
-        tz_name: tz_name.to_string(),
+    let timezone = Tz::from_str(city.tz).map_err(|_| LocationLookupError::InvalidTimezone {
+        tz_name: city.tz.to_string(),
     })?;
 
     Ok(CityLocation {
@@ -161,7 +160,7 @@ pub fn resolve_city(query: &str) -> Result<CityLocation, LocationLookupError> {
         country_code: city.country.to_string(),
         latitude: city.lat,
         longitude: city.lng,
-        timezone_name: tz_name.to_string(),
+        timezone_name: city.tz.to_string(),
     })
 }
 
