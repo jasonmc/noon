@@ -127,6 +127,16 @@ pub fn solar_elevation_degrees(
     rad_to_deg(sin_el.clamp(-1.0, 1.0).asin())
 }
 
+/// Returns the equation of time in minutes (apparent solar time minus mean solar time) for `date`.
+pub fn equation_of_time_minutes(date: NaiveDate) -> f64 {
+    calc_equation_of_time(calc_time_julian_cent(julian_day(date)))
+}
+
+/// Returns the solar declination angle in degrees (`[-23.44, +23.44]`) for `date`.
+pub fn solar_declination_degrees(date: NaiveDate) -> f64 {
+    calc_solar_declination(calc_time_julian_cent(julian_day(date)))
+}
+
 fn timezone_offset_hours(tz: Tz, date: NaiveDate) -> Result<f64, SolarComputationError> {
     let local_midday = zoned_time(
         tz,

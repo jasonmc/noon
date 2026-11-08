@@ -1,14 +1,20 @@
 use crate::Location;
-use crate::solar::{DaylightWindow, solar_elevation_degrees};
-use chrono::{DateTime, NaiveDate, Timelike};
+use crate::solar::{
+    DaylightWindow, equation_of_time_minutes, solar_declination_degrees, solar_elevation_degrees,
+};
+use chrono::{DateTime, Datelike, NaiveDate, Timelike};
 use chrono_tz::Tz;
 use std::fmt::Write;
 
 const COLS: usize = 48;
+const ROWS: usize = 13;
 const STEPS_PER_HEMISPHERE: usize = 6;
 const DEG_PER_ROW: f64 = 90.0 / STEPS_PER_HEMISPHERE as f64;
 const HORIZON_ROW: usize = STEPS_PER_HEMISPHERE;
-const Y_LABELS: [&str; 13] = [
+const ANA_COLS: usize = 25;
+const ANA_MID: usize = ANA_COLS / 2;
+const MAX_DECL: f64 = 23.44;
+const Y_LABELS: [&str; ROWS] = [
     "  +90° ┤",
     "       │",
     "  +60° ┤",
@@ -24,7 +30,7 @@ const Y_LABELS: [&str; 13] = [
     "  -90° ┤",
 ];
 
-/// Renders a 24-hour solar elevation arc visualization for the given date and location.
+/// Renders a 24-hour solar elevation arc alongside the annual solar analemma.
 pub fn render_solar_arc(
     location: Location,
     date: NaiveDate,
@@ -92,6 +98,39 @@ pub fn render_solar_arc(
         points[col].2 = "\x1b[1;96m";
     }
 
+    let sign = if location.latitude < 0.0 { -1.0 } else { 1.0 };
+    let mut ana = [[(" ", ""); ANA_COLS]; ROWS];
+    for row in &mut ana {
+        row[ANA_MID] = ("│", "\x1b[90m");
+    }
+    for (c, cell) in ana[HORIZON_ROW].iter_mut().enumerate() {
+        *cell = if c == ANA_MID {
+            ("┼", "\x1b[90m")
+        } else {
+            ("─", "\x1b[90m")
+        };
+    }
+
+    let ana_coords = |d: NaiveDate| {
+        let r = ((1.0 - sign * solar_declination_degrees(d) / MAX_DECL) * HORIZON_ROW as f64)
+            .round()
+            .clamp(0.0, (ROWS - 1) as f64) as usize;
+        let c = (ANA_MID as f64 + equation_of_time_minutes(d) / 1.5)
+            .round()
+            .clamp(0.0, (ANA_COLS - 1) as f64) as usize;
+        (r, c)
+    };
+    for d in (1..=366).filter_map(|ord| NaiveDate::from_yo_opt(date.year(), ord)) {
+        let (r, c) = ana_coords(d);
+        ana[r][c] = if r < HORIZON_ROW {
+            ("•", "\x1b[38;5;220m")
+        } else {
+            ("·", "\x1b[38;5;68m")
+        };
+    }
+    let (tr, tc) = ana_coords(date);
+    ana[tr][tc] = ("◉", "\x1b[1;96m");
+
     let mut out = String::new();
     for (row, label) in Y_LABELS.iter().enumerate() {
         paint(&mut out, label, "\x1b[90m", use_color);
@@ -104,29 +143,44 @@ pub fn render_solar_arc(
                 out.push(' ');
             }
         }
+
+        let decl = sign * MAX_DECL * (1.0 - row as f64 / HORIZON_ROW as f64);
+        let ana_elev = 90.0 - (location.latitude - decl).abs();
+        let ana_label = if row == HORIZON_ROW {
+            format!("     {ana_elev:+3.0}° ┼")
+        } else if row % 2 == 0 {
+            format!("     {ana_elev:+3.0}° ┤")
+        } else {
+            "          │".to_string()
+        };
+        paint(&mut out, &ana_label, "\x1b[90m", use_color);
+        for &(glyph, color) in &ana[row] {
+            paint(&mut out, glyph, color, use_color);
+        }
         out.push('\n');
     }
 
     paint(
         &mut out,
-        "       └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴\n",
+        "       └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴          └──┴────┴────┼────┴────┴──\n",
         "\x1b[90m",
         use_color,
     );
     paint(
         &mut out,
-        "     00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00\n",
+        "     00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00         -15m  -7m   0m  +7m  +15m\n",
         "\x1b[90m",
         use_color,
     );
 
+    let eot = equation_of_time_minutes(date);
     out.push_str("       ");
     match daylight {
         DaylightWindow::Daylight { sunrise, sunset } => {
             paint(&mut out, "▲", "\x1b[1;38;5;214m", use_color);
             out.push_str(" Sunrise  ");
             paint(&mut out, "●", "\x1b[1;93m", use_color);
-            let _ = write!(out, " Solar noon ({noon_elev:+.1}°)  ");
+            let _ = write!(out, " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  ");
             paint(&mut out, "▼", "\x1b[1;38;5;208m", use_color);
             let mins = (*sunset - *sunrise).num_minutes().max(0);
             let _ = write!(
@@ -140,14 +194,14 @@ pub fn render_solar_arc(
             paint(&mut out, "●", "\x1b[1;93m", use_color);
             let _ = write!(
                 out,
-                " Solar noon ({noon_elev:+.1}°)  •  Polar night (0h 00m daylight)"
+                " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  •  Polar night (0h 00m daylight)"
             );
         }
         DaylightWindow::SunNeverSets => {
             paint(&mut out, "●", "\x1b[1;93m", use_color);
             let _ = write!(
                 out,
-                " Solar noon ({noon_elev:+.1}°)  •  Midnight sun (24h 00m daylight)"
+                " Solar noon ({noon_elev:+.1}°, EoT {eot:+.1}m)  •  Midnight sun (24h 00m daylight)"
             );
         }
     }
@@ -200,6 +254,7 @@ mod tests {
         assert!(rendered.contains('●'));
         assert!(rendered.contains('▼'));
         assert!(rendered.contains("00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00"));
+        assert!(rendered.contains("-15m  -7m   0m  +7m  +15m"));
         assert!(!rendered.contains("\x1b["));
     }
 
