@@ -1,9 +1,8 @@
 use crate::Location;
 use crate::solar::{
-    DaylightWindow, equation_of_time_minutes, solar_declination_degrees, solar_elevation_degrees,
-    sunrise_sunset_datetimes,
+    DaylightWindow, solar_declination_degrees, solar_elevation_degrees, sunrise_sunset_datetimes,
 };
-use chrono::{DateTime, Datelike, Days, NaiveDate, Timelike};
+use chrono::{DateTime, Days, NaiveDate, Timelike};
 use chrono_tz::Tz;
 use std::fmt::Write;
 
@@ -15,6 +14,7 @@ const HORIZON_ROW: usize = STEPS_PER_HEMISPHERE;
 const ANA_COLS: usize = 17;
 const ANA_MID: usize = ANA_COLS / 2;
 const MAX_DECL: f64 = 23.44;
+const MAX_DECL_RATE: f64 = 0.40;
 const Y_LABELS: [&str; ROWS] = [
     " +90° ┤",
     "      │",
@@ -31,7 +31,7 @@ const Y_LABELS: [&str; ROWS] = [
     " -90° ┤",
 ];
 
-/// Renders a 24-hour solar elevation arc alongside the annual solar analemma.
+/// Renders a 24-hour solar elevation arc alongside the annual noon peak & rate loop.
 pub fn render_solar_arc(
     location: Location,
     date: NaiveDate,
@@ -112,30 +112,53 @@ pub fn render_solar_arc(
         };
     }
 
-    let ana_coords = |d: NaiveDate| {
-        let r = ((1.0 - sign * solar_declination_degrees(d) / MAX_DECL) * HORIZON_ROW as f64)
-            .round()
-            .clamp(0.0, (ROWS - 1) as f64) as usize;
-        let c = (ANA_MID as f64 + equation_of_time_minutes(d) / 2.2)
-            .round()
-            .clamp(0.0, (ANA_COLS - 1) as f64) as usize;
-        (r, c)
+    let decl_rate = |d: NaiveDate| {
+        let prev = d.pred_opt().unwrap_or(d);
+        let next = d.succ_opt().unwrap_or(d);
+        sign * (solar_declination_degrees(next) - solar_declination_degrees(prev)) * 0.5
     };
-    for d in (1..=366).filter_map(|ord| NaiveDate::from_yo_opt(date.year(), ord)) {
-        let (r, c) = ana_coords(d);
-        ana[r][c] = if r < HORIZON_ROW {
-            ("•", "\x1b[38;5;220m")
-        } else {
-            ("·", "\x1b[38;5;68m")
-        };
+    let row_dc = |r: usize| -> &'static [usize] {
+        match r.min((ROWS - 1).saturating_sub(r)) {
+            0 => &[0, 1, 2],
+            1 => &[3, 4],
+            2 => &[5],
+            3 | 4 => &[6],
+            _ => &[7],
+        }
+    };
+    for r in 0..ROWS {
+        for &dc in row_dc(r) {
+            for c in [ANA_MID - dc, ANA_MID + dc] {
+                ana[r][c] = if r < HORIZON_ROW || (r == HORIZON_ROW && c > ANA_MID) {
+                    ("•", "\x1b[38;5;220m")
+                } else {
+                    ("·", "\x1b[38;5;68m")
+                };
+            }
+        }
     }
-    let (tr, tc) = ana_coords(date);
+    let tr = ((1.0 - sign * solar_declination_degrees(date) / MAX_DECL) * HORIZON_ROW as f64)
+        .round()
+        .clamp(0.0, (ROWS - 1) as f64) as usize;
+    let rate = decl_rate(date);
+    let raw_c = (ANA_MID as f64 + (rate / MAX_DECL_RATE) * (ANA_MID - 1) as f64).round() as isize;
+    let dcs = row_dc(tr);
+    let tc_dc = dcs
+        .iter()
+        .copied()
+        .min_by_key(|&dc| (raw_c - ANA_MID as isize).abs().abs_diff(dc as isize))
+        .unwrap_or(0);
+    let tc = if rate < 0.0 {
+        ANA_MID - tc_dc
+    } else {
+        ANA_MID + tc_dc
+    };
     ana[tr][tc] = ("◉", "\x1b[1;96m");
 
     let mut out = String::new();
     paint(
         &mut out,
-        "       Daily Solar Arc (24h elevation)                        Annual Analemma\n",
+        "       Daily Solar Arc (24h elevation)                  Annual Noon Peak & Rate\n",
         "\x1b[90m",
         use_color,
     );
@@ -175,12 +198,11 @@ pub fn render_solar_arc(
     );
     paint(
         &mut out,
-        "    00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00     -15m    0m   +15m\n",
+        "    00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00    -0.4°   0°   +0.4°\n",
         "\x1b[90m",
         use_color,
     );
 
-    let eot = equation_of_time_minutes(date);
     out.push_str("      ");
     match daylight {
         DaylightWindow::Daylight { sunrise, sunset } => {
@@ -213,7 +235,7 @@ pub fn render_solar_arc(
         }
     }
     pad_to_col(&mut out, 62);
-    paint(&mut out, "◄ late · early ►", "\x1b[90m", use_color);
+    paint(&mut out, "◄ losing·gaining►", "\x1b[90m", use_color);
 
     out.push_str("\n      ");
     if let DaylightWindow::Daylight { sunrise, sunset } = daylight {
@@ -230,7 +252,7 @@ pub fn render_solar_arc(
     }
     pad_to_col(&mut out, 62);
     paint(&mut out, "◉", "\x1b[1;96m", use_color);
-    let _ = write!(out, " {} ({eot:+.1}m)", date.format("%b %d"));
+    let _ = write!(out, " {} {rate:+.2}°/d", date.format("%b %d"));
 
     if sign * solar_declination_degrees(date) < 0.0
         && let DaylightWindow::Daylight { sunrise, sunset } = daylight
@@ -491,7 +513,7 @@ mod tests {
         assert!(rendered.contains('●'));
         assert!(rendered.contains('▼'));
         assert!(rendered.contains("00:00 03:00 06:00 09:00 12:00 15:00 18:00 21:00 24:00"));
-        assert!(rendered.contains("-15m    0m   +15m"));
+        assert!(rendered.contains("-0.4°   0°   +0.4°"));
         assert!(!rendered.contains("\x1b["));
     }
 
@@ -665,10 +687,10 @@ mod tests {
         let (_, feb_byte) = analemma_marker_pos(2026, 2, 11);
         let (_, nov_byte) = analemma_marker_pos(2026, 11, 3);
 
-        // June solstice sits at the top of the analemma (row 0); December solstice sits at the bottom (row 12).
+        // June solstice sits at the top of the loop (row 0); December solstice sits at the bottom (row 12).
         assert_eq!(jun_row, 0);
         assert_eq!(dec_row, ROWS - 1);
-        // February EoT (-14.2m) is on the left lobe; November EoT (+16.4m) is on the right lobe.
-        assert!(feb_byte < nov_byte);
+        // November (-0.31°/d) is on the left (losing) side; February (+0.32°/d) is on the right (gaining) side.
+        assert!(nov_byte < feb_byte);
     }
 }
